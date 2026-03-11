@@ -32,6 +32,7 @@ SAS_TOKEN_EXPIRY_SECONDS = 3600
 ACTIONS = {
     "worklist.create_item": CreateWorklistItem,
 }
+EXPIRED_TOKEN = "ExpiredToken"
 
 
 class RelayListener:
@@ -140,11 +141,15 @@ async def main():
             logger.warning("\nShutting down...")
             break
         except ConnectionClosedError as e:
-            if "ExpiredToken" in str(e) and e.code == CloseCode.INTERNAL_ERROR.value:
+            code = e.rcvd.code if e.rcvd else "N/A"
+            reason = e.rcvd.reason if e.rcvd else "N/A"
+
+            if code == CloseCode.INTERNAL_ERROR.value and EXPIRED_TOKEN in reason:
                 logger.info("SAS token expired, refreshing...")
             else:
-                logger.warning(f"Connection closed with code {e.code}: {e.reason}")
-                raise e
+                logger.warning(f"Connection closed with code {code}: {reason}")
+                logger.warning("Retrying in 5 seconds...")
+                await asyncio.sleep(5)
         except Exception as e:
             logger.warning(f"Connection error: {e}")
             logger.warning("Retrying in 5 seconds...")

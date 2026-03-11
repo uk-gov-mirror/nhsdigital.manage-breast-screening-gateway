@@ -138,12 +138,18 @@ async def test_main_handles_connection_closed_and_keyboard_interrupt(
 
     relay_listener_instance.listen.side_effect = [
         ConnectionClosedError(Close(CloseCode.INTERNAL_ERROR, "ExpiredToken"), None),
+        ConnectionClosedError(Close(CloseCode.INTERNAL_ERROR, "Something else"), None),
+        ConnectionClosedError(Close(CloseCode.BAD_GATEWAY, "Bad gateway"), None),
         KeyboardInterrupt(),
     ]
 
     await main()
 
-    assert relay_listener_instance.listen.call_count == 2
+    assert relay_listener_instance.listen.call_count == 4
     mock_logger.info.assert_any_call("Socket Listener Starting...")
     mock_logger.info.assert_any_call("SAS token expired, refreshing...")
+    mock_logger.warning.assert_any_call("Connection closed with code 1011: Something else")
+    mock_logger.warning.assert_any_call("Retrying in 5 seconds...")
+    mock_logger.warning.assert_any_call("Connection closed with code 1014: Bad gateway")
+    mock_logger.warning.assert_any_call("Retrying in 5 seconds...")
     mock_logger.warning.assert_any_call("\nShutting down...")
