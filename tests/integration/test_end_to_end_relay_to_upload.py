@@ -85,12 +85,13 @@ class TestEndToEndRelayToUpload:
         return server
 
     @pytest.fixture
-    def pacs_server(self, pacs_storage):
+    def pacs_server(self, pacs_storage, mwl_storage):
         """PACS server using the shared storage."""
         server = PACSServer.__new__(PACSServer)
         server.ae_title = "SCREENING_PACS"
         server.port = 4244
         server.storage = pacs_storage
+        server.mwl_storage = mwl_storage
         server.ae = None
         server.block = False
         return server
