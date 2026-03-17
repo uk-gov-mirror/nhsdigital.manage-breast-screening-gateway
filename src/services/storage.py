@@ -364,6 +364,7 @@ class MWLStorage(Storage):
 
     def find_worklist_items(
         self,
+        accession_number: Optional[str] = None,
         modality: Optional[str] = None,
         scheduled_date: Optional[str] = None,
         patient_id: Optional[str] = None,
@@ -372,6 +373,7 @@ class MWLStorage(Storage):
         Query worklist items with optional filters.
 
         Args:
+            accession_number: Filter by accession number
             modality: Filter by modality (e.g., "MG")
             scheduled_date: Filter by scheduled date (YYYYMMDD)
             patient_id: Filter by patient ID
@@ -387,6 +389,10 @@ class MWLStorage(Storage):
         )
         where_clauses = []
         params = []
+
+        if accession_number:
+            where_clauses.append("accession_number = ?")
+            params.append(accession_number)
 
         if modality:
             where_clauses.append("modality = ?")
