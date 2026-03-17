@@ -116,6 +116,23 @@ class TestCFindReturnsWorklistItems:
         assert status == SUCCESS
         assert ds is None
 
+    def test_cfind_filters_by_accession_number(self, event, storage):
+        event.identifier.AccessionNumber = "ACC234567"
+
+        results = list(CFind(storage).call(event))
+
+        assert len(results) == 2
+
+        status, ds = results[0]
+        assert status == PENDING
+        assert ds.PatientID == "999234567"
+        assert ds.PatientName == "JONES^MARY"
+        assert ds.AccessionNumber == "ACC234567"
+
+        status, ds = results[1]
+        assert status == SUCCESS
+        assert ds is None
+
     def test_cfind_filters_by_modality(self, event, storage):
         storage.store_worklist_item(
             WorklistItem(

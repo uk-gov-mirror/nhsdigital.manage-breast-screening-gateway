@@ -260,7 +260,9 @@ class TestWorkingStorage:
 
         subject = MWLStorage(tmp_dir)
         mock_connection.reset_mock()
-        subject.find_worklist_items(accession_number="ACC123456", modality="MG", scheduled_date="20240101", patient_id="999123456")
+        subject.find_worklist_items(
+            accession_number="ACC123456", modality="MG", scheduled_date="20240101", patient_id="999123456"
+        )
 
         mock_connection.execute.assert_called_once_with(
             (
