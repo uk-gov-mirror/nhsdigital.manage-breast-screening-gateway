@@ -276,6 +276,67 @@ class TestWorkingStorage:
             ["ACC123456", "MG", "20240101", "999123456"],
         )
 
+    def test_find_worklist_items_with_date_range(self, mock_db, tmp_dir):
+        mock_cursor = MagicMock()
+        mock_cursor.fetchall.return_value = []
+        mock_connection = MagicMock()
+        mock_connection.execute.return_value = mock_cursor
+        mock_db.connect.return_value = mock_connection
+
+        subject = MWLStorage(tmp_dir)
+        mock_connection.reset_mock()
+
+        subject.find_worklist_items(scheduled_date="20240101 - 20240131")
+
+        mock_connection.execute.assert_called_once_with(
+            (
+                "SELECT accession_number, modality, patient_birth_date, patient_id, "
+                "patient_name, patient_sex, procedure_code, scheduled_date, scheduled_time, "
+                "source_message_id, study_description, study_instance_uid, status, mpps_instance_uid "
+                "FROM worklist_items WHERE scheduled_date >= ? AND scheduled_date <= ? "
+                "ORDER BY scheduled_date, scheduled_time"
+            ),
+            ["20240101", "20240131"],
+        )
+
+    def test_find_worklist_items_with_open_ended_date_range(self, mock_db, tmp_dir):
+        mock_cursor = MagicMock()
+        mock_cursor.fetchall.return_value = []
+        mock_connection = MagicMock()
+        mock_connection.execute.return_value = mock_cursor
+        mock_db.connect.return_value = mock_connection
+
+        subject = MWLStorage(tmp_dir)
+        mock_connection.reset_mock()
+
+        subject.find_worklist_items(scheduled_date="20240101 -")
+
+        mock_connection.execute.assert_called_once_with(
+            (
+                "SELECT accession_number, modality, patient_birth_date, patient_id, "
+                "patient_name, patient_sex, procedure_code, scheduled_date, scheduled_time, "
+                "source_message_id, study_description, study_instance_uid, status, mpps_instance_uid "
+                "FROM worklist_items WHERE scheduled_date >= ? "
+                "ORDER BY scheduled_date, scheduled_time"
+            ),
+            ["20240101"],
+        )
+
+        mock_connection.reset_mock()
+
+        subject.find_worklist_items(scheduled_date="-20240101")
+
+        mock_connection.execute.assert_called_once_with(
+            (
+                "SELECT accession_number, modality, patient_birth_date, patient_id, "
+                "patient_name, patient_sex, procedure_code, scheduled_date, scheduled_time, "
+                "source_message_id, study_description, study_instance_uid, status, mpps_instance_uid "
+                "FROM worklist_items WHERE scheduled_date <= ? "
+                "ORDER BY scheduled_date, scheduled_time"
+            ),
+            ["20240101"],
+        )
+
     def test_get_worklist_item(self, mock_db, tmp_dir, result):
         mock_cursor = MagicMock()
         mock_cursor.fetchone.return_value = result

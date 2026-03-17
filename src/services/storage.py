@@ -375,7 +375,7 @@ class MWLStorage(Storage):
         Args:
             accession_number: Filter by accession number
             modality: Filter by modality (e.g., "MG")
-            scheduled_date: Filter by scheduled date (YYYYMMDD)
+            scheduled_date: Filter by scheduled date (YYYYMMDD, or range like "20240101-20240131")
             patient_id: Filter by patient ID
 
         Returns:
@@ -399,8 +399,19 @@ class MWLStorage(Storage):
             params.append(modality)
 
         if scheduled_date:
-            where_clauses.append("scheduled_date = ?")
-            params.append(scheduled_date)
+            if scheduled_date.endswith("-"):
+                where_clauses.append("scheduled_date >= ?")
+                params.append(scheduled_date[:-1].strip())
+            elif scheduled_date.startswith("-"):
+                where_clauses.append("scheduled_date <= ?")
+                params.append(scheduled_date[1:].strip())
+            elif "-" in scheduled_date:
+                start_date, end_date = [s.strip() for s in scheduled_date.split("-", 1)]
+                where_clauses.append("scheduled_date >= ? AND scheduled_date <= ?")
+                params.extend([start_date, end_date])
+            else:
+                where_clauses.append("scheduled_date = ?")
+                params.append(scheduled_date.strip())
 
         if patient_id:
             where_clauses.append("patient_id = ?")
