@@ -9,7 +9,7 @@ from server import PACSServer
 from telemetry import configure_telemetry
 
 load_dotenv()
-configure_telemetry()
+configure_telemetry(service_name="pacs")
 
 
 def main():

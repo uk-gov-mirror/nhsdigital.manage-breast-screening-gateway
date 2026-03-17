@@ -12,7 +12,7 @@ from services.storage import MWLStorage, PACSStorage
 from telemetry import configure_telemetry
 
 load_dotenv()
-configure_telemetry()
+configure_telemetry(service_name="upload")
 
 
 def main():

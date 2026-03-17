@@ -16,11 +16,12 @@ import urllib.parse
 
 from dotenv import load_dotenv
 from websockets.asyncio.client import connect
-from websockets.frames import CloseCode
 from websockets.exceptions import ConnectionClosedError
+from websockets.frames import CloseCode
 
 from services.mwl.create_worklist_item import CreateWorklistItem
 from services.storage import MWLStorage
+from telemetry import configure_telemetry
 
 load_dotenv()
 
@@ -130,6 +131,7 @@ async def main():
         level=os.getenv("LOG_LEVEL", "INFO").upper(),
         format=os.getenv("LOG_FORMAT", "%(asctime)s - %(name)s - %(levelname)s - %(message)s"),
     )
+    configure_telemetry(service_name="relay-listener")
 
     logger.info("Socket Listener Starting...")
     storage = MWLStorage(db_path=DB_PATH)
