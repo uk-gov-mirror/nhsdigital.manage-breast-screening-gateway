@@ -166,6 +166,88 @@ class TestCFindReturnsWorklistItems:
         assert status == SUCCESS
         assert ds is None
 
+    def test_cfind_filters_by_scheduled_time_range(self, event, storage):
+        event.identifier.ScheduledProcedureStepSequence[0].ScheduledProcedureStepStartTime = "090000-093000"
+
+        results = list(CFind(storage).call(event))
+
+        assert len(results) == 2
+
+        status, ds = results[0]
+        assert status == PENDING
+        assert ds.PatientID == "999123456"
+        assert ds.PatientName == "SMITH^JANE"
+        assert ds.PatientBirthDate == "19800101"
+        assert ds.AccessionNumber == "ACC123456"
+        assert ds.ScheduledProcedureStepSequence[0].Modality == "MG"
+        assert ds.ScheduledProcedureStepSequence[0].ScheduledProcedureStepStartTime == "090000"
+
+        status, ds = results[1]
+        assert status == SUCCESS
+        assert ds is None
+
+    def test_cfind_filters_by_before_scheduled_time(self, event, storage):
+        event.identifier.ScheduledProcedureStepSequence[0].ScheduledProcedureStepStartTime = "-093000"
+
+        results = list(CFind(storage).call(event))
+
+        assert len(results) == 2
+
+        status, ds = results[0]
+        assert status == PENDING
+        assert ds.PatientID == "999123456"
+        assert ds.PatientName == "SMITH^JANE"
+        assert ds.PatientBirthDate == "19800101"
+        assert ds.AccessionNumber == "ACC123456"
+        assert ds.ScheduledProcedureStepSequence[0].Modality == "MG"
+        assert ds.ScheduledProcedureStepSequence[0].ScheduledProcedureStepStartTime == "090000"
+
+        status, ds = results[1]
+        assert status == SUCCESS
+        assert ds is None
+
+    def test_cfind_filters_by_after_scheduled_time(self, event, storage):
+        event.identifier.ScheduledProcedureStepSequence[0].ScheduledProcedureStepStartTime = "093000-"
+
+        results = list(CFind(storage).call(event))
+
+        assert len(results) == 2
+
+        status, ds = results[0]
+        assert status == PENDING
+        assert ds.PatientID == "999234567"
+        assert ds.PatientName == "JONES^MARY"
+        assert ds.PatientBirthDate == "19900202"
+        assert ds.AccessionNumber == "ACC234567"
+        assert ds.ScheduledProcedureStepSequence[0].Modality == "MG"
+        assert ds.ScheduledProcedureStepSequence[0].ScheduledProcedureStepStartTime == "094500"
+
+        status, ds = results[1]
+        assert status == SUCCESS
+        assert ds is None
+
+    def test_cfind_filters_by_date_and_time_range(self, event, storage):
+        event.identifier.ScheduledProcedureStepSequence[0].ScheduledProcedureStepStartDate = "20240101-20240201"
+        event.identifier.ScheduledProcedureStepSequence[0].ScheduledProcedureStepStartTime = "090000-093000"
+
+        results = list(CFind(storage).call(event))
+
+        assert len(results) == 2
+
+        status, ds = results[0]
+        assert status == PENDING
+        assert ds.PatientID == "999123456"
+        assert ds.PatientName == "SMITH^JANE"
+        assert ds.PatientBirthDate == "19800101"
+        assert ds.AccessionNumber == "ACC123456"
+        assert ds.ScheduledProcedureStepSequence[0].Modality == "MG"
+        assert ds.ScheduledProcedureStepSequence[0].ScheduledProcedureStepStartDate == "20240101"
+        assert ds.ScheduledProcedureStepSequence[0].ScheduledProcedureStepStartTime == "090000"
+
+        status, ds = results[1]
+        assert status == SUCCESS
+        assert ds is None
+
     def test_cfind_filters_by_modality(self, event, storage):
         storage.store_worklist_item(
             WorklistItem(
