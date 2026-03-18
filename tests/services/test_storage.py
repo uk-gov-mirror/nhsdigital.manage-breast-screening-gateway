@@ -219,7 +219,16 @@ class TestWorkingStorage:
         assert len(results) == 1
         assert results[0] == WorklistItem(**result)
 
-    def test_find_worklist_items_with_filters(self, mock_db, tmp_dir):
+    @pytest.mark.parametrize(
+        "query_param_name, query_param_value",
+        [
+            ("accession_number", "ACC123456"),
+            ("patient_id", "999123456"),
+            ("modality", "CT"),
+            ("scheduled_date", "20240101"),
+        ],
+    )
+    def test_find_worklist_items_with_filters(self, mock_db, tmp_dir, query_param_name, query_param_value):
         mock_cursor = MagicMock()
         mock_cursor.fetchall.return_value = []
         mock_connection = MagicMock()
@@ -229,47 +238,31 @@ class TestWorkingStorage:
         subject = MWLStorage(tmp_dir)
         mock_connection.reset_mock()
 
-        subject.find_worklist_items(patient_id="999123456")
+        find_args = {query_param_name: query_param_value}
+        subject.find_worklist_items(**find_args)
 
         mock_connection.execute.assert_called_once_with(
             (
                 "SELECT accession_number, modality, patient_birth_date, patient_id, "
                 "patient_name, patient_sex, procedure_code, scheduled_date, scheduled_time, "
                 "source_message_id, study_description, study_instance_uid, status, mpps_instance_uid "
-                "FROM worklist_items WHERE patient_id = ? ORDER BY scheduled_date, scheduled_time"
+                f"FROM worklist_items WHERE {query_param_name} = ? ORDER BY scheduled_date, scheduled_time"
             ),
-            ["999123456"],
+            [query_param_value],
         )
 
-        mock_connection.reset_mock()
-        subject.find_worklist_items(modality="CT")
+    def test_find_worklist_items_with_multiple_filters(self, mock_db, tmp_dir):
+        mock_cursor = MagicMock()
+        mock_cursor.fetchall.return_value = []
+        mock_connection = MagicMock()
+        mock_connection.execute.return_value = mock_cursor
+        mock_db.connect.return_value = mock_connection
 
-        mock_connection.execute.assert_called_once_with(
-            (
-                "SELECT accession_number, modality, patient_birth_date, patient_id, "
-                "patient_name, patient_sex, procedure_code, scheduled_date, scheduled_time, "
-                "source_message_id, study_description, study_instance_uid, status, mpps_instance_uid "
-                "FROM worklist_items WHERE modality = ? ORDER BY scheduled_date, scheduled_time"
-            ),
-            ["CT"],
+        subject = MWLStorage(tmp_dir)
+        mock_connection.reset_mock()
+        subject.find_worklist_items(
+            accession_number="ACC123456", modality="MG", scheduled_date="20240101", patient_id="999123456"
         )
-
-        mock_connection.reset_mock()
-        subject.find_worklist_items(scheduled_date="20240101")
-
-        mock_connection.execute.assert_called_once_with(
-            (
-                "SELECT accession_number, modality, patient_birth_date, patient_id, "
-                "patient_name, patient_sex, procedure_code, scheduled_date, scheduled_time, "
-                "source_message_id, study_description, study_instance_uid, status, mpps_instance_uid "
-                "FROM worklist_items WHERE scheduled_date = ? "
-                "ORDER BY scheduled_date, scheduled_time"
-            ),
-            ["20240101"],
-        )
-
-        mock_connection.reset_mock()
-        subject.find_worklist_items(modality="MG", scheduled_date="20240101", patient_id="999123456")
 
         mock_connection.execute.assert_called_once_with(
             (
@@ -277,10 +270,10 @@ class TestWorkingStorage:
                 "patient_name, patient_sex, procedure_code, scheduled_date, scheduled_time, "
                 "source_message_id, study_description, study_instance_uid, status, mpps_instance_uid "
                 "FROM worklist_items "
-                "WHERE modality = ? AND scheduled_date = ? AND patient_id = ? "
+                "WHERE accession_number = ? AND modality = ? AND scheduled_date = ? AND patient_id = ? "
                 "ORDER BY scheduled_date, scheduled_time"
             ),
-            ["MG", "20240101", "999123456"],
+            ["ACC123456", "MG", "20240101", "999123456"],
         )
 
     def test_get_worklist_item(self, mock_db, tmp_dir, result):

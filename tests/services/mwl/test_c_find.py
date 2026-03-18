@@ -107,6 +107,16 @@ class TestCFind:
         status, ds = results[3]
         assert status == SUCCESS
 
+    def test_call_with_accession_number_filter(self, handler, mock_storage, mock_event):
+        mock_event.identifier.AccessionNumber = "ACC12345"
+        mock_storage.find_worklist_items.return_value = []
+
+        list(handler.call(mock_event))
+
+        mock_storage.find_worklist_items.assert_called_once_with(
+            accession_number="ACC12345", modality=None, scheduled_date=None, patient_id=None
+        )
+
     def test_call_with_modality_filter(self, handler, mock_storage, mock_event):
         # Add modality to query
         sps_item = Dataset()
@@ -116,7 +126,9 @@ class TestCFind:
 
         list(handler.call(mock_event))
 
-        mock_storage.find_worklist_items.assert_called_once_with(modality="MG", scheduled_date=None, patient_id=None)
+        mock_storage.find_worklist_items.assert_called_once_with(
+            accession_number=None, modality="MG", scheduled_date=None, patient_id=None
+        )
 
     def test_call_with_date_filter(self, handler, mock_storage, mock_event):
         sps_item = Dataset()
@@ -127,7 +139,7 @@ class TestCFind:
         list(handler.call(mock_event))
 
         mock_storage.find_worklist_items.assert_called_once_with(
-            modality=None, scheduled_date="20260107", patient_id=None
+            accession_number=None, modality=None, scheduled_date="20260107", patient_id=None
         )
 
     def test_call_with_patient_id_filter(self, handler, mock_storage, mock_event):
@@ -137,7 +149,7 @@ class TestCFind:
         list(handler.call(mock_event))
 
         mock_storage.find_worklist_items.assert_called_once_with(
-            modality=None, scheduled_date=None, patient_id="9876543210"
+            accession_number=None, modality=None, scheduled_date=None, patient_id="9876543210"
         )
 
     def test_call_handles_storage_exception(self, handler, mock_storage, mock_event):
