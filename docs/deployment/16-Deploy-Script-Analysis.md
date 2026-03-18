@@ -30,13 +30,11 @@ Lines 49–68
 ### Step 2: Helper Functions
 
 ```text
-Lines 70–163
+Lines 70–100
 ```
 
 **What it does**: Defines internal helpers:
 - `Invoke-Nssm` — Wraps every NSSM call and checks `$LASTEXITCODE`. Throws immediately with the full command string if NSSM returns a non-zero exit code.
-- `Get-PythonVersionFromPyproject` — Parses `requires-python` from `pyproject.toml`.
-- `Get-PythonVersionFromZip` — Reads `pyproject.toml` directly from a ZIP archive.
 - `Stop-AllServices` — Gracefully stops all components with individual timeout enforcement.
 
 **Why it matters**: NSSM is a native executable and PowerShell does not treat its non-zero exit codes as errors by default. Without explicit checking, a failed `nssm install` or `nssm set` would silently proceed, creating a service that is misconfigured. The helper eliminates this class of bug across all ~12 NSSM invocations.
@@ -49,12 +47,11 @@ Lines 70–163
 Lines 165–206
 ```
 
-**What it does**: When `-Bootstrap` is passed, installs Chocolatey (if absent), Python, uv, and NSSM. Each tool is only installed if not already present in PATH. The Python version is resolved from a chain of sources: `-PythonVersion` parameter, local `pyproject.toml`, or `pyproject.toml` read directly from the ZIP archive.
+**What it does**: When `-Bootstrap` is passed, installs Chocolatey (if absent), Python, uv, and NSSM. Each tool is only installed if not already present in PATH. The Python version comes from the `-PythonVersion` parameter (sourced from `.tool-versions` in the repo via the deploy pipeline), with a fallback to `3.14.0` if the parameter is not provided.
 
 **Why it matters**:
 - **Idempotent**: Running bootstrap twice does not reinstall tools that are already present (including Python). This makes the script safe to re-run after a partial failure without triggering Chocolatey "already installed" errors.
-- **Dynamic Python version**: Rather than hardcoding a Python version, the script resolves it from a three-level chain: explicit parameter, local `pyproject.toml`, or the `pyproject.toml` inside the deployment archive. This means the packaging pipeline is the single source of truth.
-- **Fails fast**: If no version can be determined from any source, the script throws before attempting any installation.
+- **Single source of truth**: The Python version is always passed from `.tool-versions` at the root of the repo, read by `deploy_arc_ring.sh` at deploy time. This ensures the VM always runs the same Python version as CI.
 
 ---
 

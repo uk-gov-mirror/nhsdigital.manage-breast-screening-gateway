@@ -16,8 +16,8 @@ import urllib.parse
 
 from dotenv import load_dotenv
 from websockets.asyncio.client import connect
-from websockets.frames import CloseCode
 from websockets.exceptions import ConnectionClosedError
+from websockets.frames import CloseCode
 
 from services.mwl.create_worklist_item import CreateWorklistItem
 from services.storage import MWLStorage

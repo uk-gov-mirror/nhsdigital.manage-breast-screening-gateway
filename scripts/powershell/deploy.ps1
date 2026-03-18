@@ -16,7 +16,7 @@ param(
     [string]$BaseInstallPath = "C:\Program Files\NHS\ManageBreastScreeningGateway",
 
     [Parameter()]
-    [switch]$Bootstrap,
+    [bool]$Bootstrap = $true,
 
     [Parameter()]
     [int]$KeepReleases = 3,
@@ -40,7 +40,10 @@ param(
     [string]$ReleaseTag = "latest",
 
     [Parameter()]
-    [string]$GitHubToken
+    [string]$GitHubToken,
+
+    [Parameter()]
+    [string]$EnvContentB64 = ""
 )
 
 Set-StrictMode -Version Latest
@@ -67,6 +70,16 @@ function Write-Log {
     }
 }
 
+# -- Write .env (when deployed via Arc Run Command) ---------------------------
+
+if ($EnvContentB64) {
+    Write-Log "Writing .env from deployment parameter..." "INFO"
+    $envBytes = [System.Convert]::FromBase64String($EnvContentB64)
+    $envContent = [System.Text.Encoding]::UTF8.GetString($envBytes)
+    [System.IO.File]::WriteAllText((Join-Path $BaseInstallPath ".env"), $envContent, (New-Object System.Text.UTF8Encoding $false))
+    Write-Log "Written .env to $BaseInstallPath" "SUCCESS"
+}
+
 # -- Helpers ------------------------------------------------------------------
 
 function Invoke-Nssm {
@@ -77,65 +90,6 @@ function Invoke-Nssm {
     }
 }
 
-function Get-PythonVersionFromPyproject {
-    param([string]$PyprojectPath)
-    if (-not (Test-Path $PyprojectPath)) { return $null }
-    $content = Get-Content $PyprojectPath -Raw
-    if ($content -match 'requires-python\s*=\s*">=(\d+\.\d+)') { return $Matches[1] }
-    return $null
-}
-
-function Get-PythonVersionFromZip {
-    param([string]$ArchivePath)
-    if (-not $ArchivePath -or -not (Test-Path $ArchivePath)) { return $null }
-    Add-Type -Assembly System.IO.Compression.FileSystem
-    $zip = $null
-    try {
-        $zip = [System.IO.Compression.ZipFile]::OpenRead($ArchivePath)
-        $entry = $zip.Entries | Where-Object { $_.Name -eq "pyproject.toml" } | Select-Object -First 1
-
-        if ($entry) {
-            $reader = New-Object System.IO.StreamReader($entry.Open())
-            $content = $reader.ReadToEnd()
-            $reader.Close()
-            if ($content -match 'requires-python\s*=\s*">=(\d+\.\d+)') { return $Matches[1] }
-        }
-
-        # Check for inner ZIP (wrapper package from CI artifacts)
-        $innerZipEntry = $zip.Entries | Where-Object { $_.FullName -like "*.zip" } | Select-Object -First 1
-        if ($innerZipEntry) {
-            $zip.Dispose(); $zip = $null
-            $tempInner = Join-Path $env:TEMP "deploy-pyver-$([guid]::NewGuid().ToString().Substring(0,8)).zip"
-            try {
-                $outerZip = [System.IO.Compression.ZipFile]::OpenRead($ArchivePath)
-                $innerEntry = $outerZip.Entries | Where-Object { $_.FullName -eq $innerZipEntry.FullName } | Select-Object -First 1
-                [System.IO.Compression.ZipFileExtensions]::ExtractToFile($innerEntry, $tempInner, $true)
-                $outerZip.Dispose()
-
-                $innerZip = [System.IO.Compression.ZipFile]::OpenRead($tempInner)
-                $innerPyproject = $innerZip.Entries | Where-Object { $_.Name -eq "pyproject.toml" } | Select-Object -First 1
-                if ($innerPyproject) {
-                    $reader = New-Object System.IO.StreamReader($innerPyproject.Open())
-                    $content = $reader.ReadToEnd()
-                    $reader.Close()
-                    if ($content -match 'requires-python\s*=\s*">=(\d+\.\d+)') {
-                        $innerZip.Dispose()
-                        return $Matches[1]
-                    }
-                }
-                $innerZip.Dispose()
-            } finally {
-                if (Test-Path $tempInner) { Remove-Item $tempInner -Force -ErrorAction SilentlyContinue }
-            }
-        }
-    } catch {
-        Write-Log "Could not read Python version from archive: $_" "WARNING"
-        return $null
-    } finally {
-        if ($zip) { $zip.Dispose() }
-    }
-    return $null
-}
 
 function Stop-AllServices {
     param([array]$Services, [int]$TimeoutSeconds)
@@ -167,42 +121,82 @@ function Stop-AllServices {
 if ($Bootstrap) {
     Write-Log "Bootstrapping system environment..." "INFO"
 
+    function Install-WithRetry {
+        param([string]$Name, [scriptblock]$Script, [int]$MaxAttempts = 3)
+        $attempt = 0
+        while ($attempt -lt $MaxAttempts) {
+            $attempt++
+            try {
+                Write-Log "Installing $Name (attempt $attempt/$MaxAttempts)..." "INFO"
+                & $Script
+                return
+            } catch {
+                Write-Log "Failed to install ${Name}: $_" "WARNING"
+                if ($attempt -lt $MaxAttempts) {
+                    $wait = 10 * $attempt
+                    Write-Log "Waiting ${wait}s before retry..." "INFO"
+                    Start-Sleep -Seconds $wait
+                }
+            }
+        }
+        throw "Failed to install $Name after $MaxAttempts attempts."
+    }
+
     if (-not (Get-Command choco.exe -ErrorAction SilentlyContinue)) {
-        Write-Log "Installing Chocolatey..." "INFO"
-        Set-ExecutionPolicy Bypass -Scope Process -Force
-        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-        Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-        $env:Path += ";$env:ALLUSERSPROFILE\chocolatey\bin"
+        Install-WithRetry "Chocolatey" {
+            Set-ExecutionPolicy Bypass -Scope Process -Force
+            [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+            $scriptUrl = 'https://community.chocolatey.org/install.ps1'
+            Invoke-Expression (Invoke-WebRequest -UseBasicParsing -Uri $scriptUrl).Content
+        }
+        $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
+                    [System.Environment]::GetEnvironmentVariable("Path", "User")
     }
 
     $existingPython = Get-Command python.exe -ErrorAction SilentlyContinue
-    if ($existingPython) {
+    $isStoreShim = $false
+    if ($existingPython -and $existingPython.Source -like "*\Microsoft\WindowsApps\*") {
+        Write-Log "Found Python Store shim, ignoring..." "WARNING"
+        $isStoreShim = $true
+    }
+
+    if ($existingPython -and -not $isStoreShim) {
         Write-Log "Python already installed: $($existingPython.Source)" "INFO"
     } else {
         $targetPythonVersion = $PythonVersion
         if (-not $targetPythonVersion) {
-            $targetPythonVersion = Get-PythonVersionFromPyproject (Join-Path $PSScriptRoot "..\..\pyproject.toml")
+            Write-Log "PythonVersion parameter not provided, falling back to 3.14.0" "WARNING"
+            $targetPythonVersion = "3.14.0"
         }
-        if (-not $targetPythonVersion -and $ZipPath) {
-            Write-Log "Reading Python version from package archive..." "INFO"
-            $targetPythonVersion = Get-PythonVersionFromZip $ZipPath
+
+        # If version is major.minor (e.g. 3.14), append .0 for Chocolatey (3.14.0).
+        $chocoVersion = $targetPythonVersion
+        if ($chocoVersion -match '^\d+\.\d+$') { $chocoVersion = "$chocoVersion.0" }
+
+        Install-WithRetry "Python $chocoVersion" {
+            choco install python --version "$chocoVersion" -y --no-progress --limit-output
         }
-        if (-not $targetPythonVersion) {
-            throw "Python version could not be determined. Supply -PythonVersion, ensure pyproject.toml is accessible, or provide a ZipPath containing pyproject.toml."
-        }
-        Write-Log "Installing Python $targetPythonVersion..." "INFO"
-        choco install python --version "$targetPythonVersion.0" -y --no-progress
+
+        # Refresh Path to find the newly installed real Python
+        $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
+                    [System.Environment]::GetEnvironmentVariable("Path", "User")
     }
 
     if (-not (Get-Command uv.exe -ErrorAction SilentlyContinue)) {
-        Write-Log "Installing uv..." "INFO"
-        choco install uv -y --no-progress
+        Install-WithRetry "uv" {
+            choco install uv -y --no-progress --limit-output
+        }
     }
 
     if (-not (Get-Command nssm.exe -ErrorAction SilentlyContinue)) {
-        Write-Log "Installing NSSM..." "INFO"
-        choco install nssm -y --no-progress
+        Install-WithRetry "NSSM" {
+            choco install nssm -y --no-progress --limit-output
+        }
     }
+
+    # Refresh PATH one last time to ensure all new binaries are available
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
+                [System.Environment]::GetEnvironmentVariable("Path", "User")
 }
 
 # -- Package Acquisition ------------------------------------------------------
@@ -241,7 +235,10 @@ if (-not $ZipPath) {
 
     $shaAsset = $release.assets | Where-Object { $_.name -eq "$($zipAsset.name).sha256" } | Select-Object -First 1
 
-    $ZipPath = Join-Path $downloadDir $zipAsset.name
+    # Use a unique filename per run to avoid file-lock collisions when concurrent
+    # deployments target the same machine (e.g. two pipeline runs in flight).
+    $runId = [guid]::NewGuid().ToString().Substring(0, 8)
+    $ZipPath = Join-Path $downloadDir "$([System.IO.Path]::GetFileNameWithoutExtension($zipAsset.name))-$runId.zip"
     $downloadHeaders = @{ "Accept" = "application/octet-stream"; "User-Agent" = "Gateway-Deploy-Script" }
     if ($GitHubToken) { $downloadHeaders["Authorization"] = "Bearer $GitHubToken" }
 
@@ -251,22 +248,34 @@ if (-not $ZipPath) {
     Write-Log "Downloaded to $ZipPath" "SUCCESS"
 
     if ($shaAsset) {
-        $shaDownloadPath = Join-Path $downloadDir $shaAsset.name
+        $shaDownloadPath = "$ZipPath.sha256"
         Invoke-WebRequest -Uri $shaAsset.browser_download_url -Headers $downloadHeaders -OutFile $shaDownloadPath -UseBasicParsing -ErrorAction Stop
         Write-Log "Downloaded checksum" "SUCCESS"
     }
 }
 
+# -- Refresh PATH (Chocolatey updates registry but not the running process) ---
+
+$env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
+            [System.Environment]::GetEnvironmentVariable("Path", "User")
+
+# Arc Run Command runs as SYSTEM; add the explicit Chocolatey Python path as a fallback.
+if ($PythonVersion) {
+    $pyMajorMinor = (($PythonVersion -split '\.')[0..1]) -join ''
+    $pyPath = "C:\Python$pyMajorMinor"
+    if (Test-Path $pyPath) { $env:Path += ";$pyPath" }
+}
+
 # -- Validation ---------------------------------------------------------------
 
 $pythonExe = Get-Command python.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
-if (-not $pythonExe) { throw "Python not found in PATH. Run with -Bootstrap or install manually." }
+if (-not $pythonExe) { throw "Python not found in PATH. Pass -Bootstrap:`$false to skip bootstrap, or install manually." }
 
 $uvExe = Get-Command uv.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
-if (-not $uvExe) { throw "uv not found in PATH. Run with -Bootstrap or install manually." }
+if (-not $uvExe) { throw "uv not found in PATH. Pass -Bootstrap:`$false to skip bootstrap, or install manually." }
 
 $nssmExe = Get-Command nssm.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
-if (-not $nssmExe) { throw "NSSM not found in PATH. Run with -Bootstrap or install manually." }
+if (-not $nssmExe) { throw "NSSM not found in PATH. Pass -Bootstrap:`$false to skip bootstrap, or install manually." }
 
 if (-not (Test-Path $ZipPath)) { throw "Package not found at $ZipPath." }
 
@@ -393,12 +402,11 @@ try {
 
 foreach ($svc in $services) {
     $batPath = Join-Path $versionDir "start-$($svc.Name).bat"
-    $scriptPath = Join-Path "src" $svc.Script
     $batContent = @(
         '@echo off',
-        'cd /d "%~dp0"',
-        'set "PYTHONPATH=src"',
-        ('".venv\Scripts\python.exe" "' + $scriptPath + '"')
+        "cd /d `"$BaseInstallPath`"",
+        'set "PYTHONPATH=current\src"',
+        ('"current\.venv\Scripts\python.exe" "current\src\' + $svc.Script + '"')
     ) -join "`r`n"
     [System.IO.File]::WriteAllText($batPath, $batContent, [System.Text.Encoding]::ASCII)
 }
@@ -476,7 +484,7 @@ foreach ($svc in $services) {
     }
 
     Invoke-Nssm -NssmPath $nssmExe -Arguments @("install", $svc.Name, "$batPath") -Description "install $($svc.Name)"
-    Invoke-Nssm -NssmPath $nssmExe -Arguments @("set", $svc.Name, "AppDirectory", "$currentJunction") -Description "set AppDirectory"
+    Invoke-Nssm -NssmPath $nssmExe -Arguments @("set", $svc.Name, "AppDirectory", "$BaseInstallPath") -Description "set AppDirectory"
     Invoke-Nssm -NssmPath $nssmExe -Arguments @("set", $svc.Name, "Description", "Manage Breast Screening Gateway - $($svc.Name)") -Description "set Description"
     Invoke-Nssm -NssmPath $nssmExe -Arguments @("set", $svc.Name, "Start", "SERVICE_AUTO_START") -Description "set Start"
 
@@ -535,7 +543,7 @@ if ($cutoverFailed) {
             $batPath = Join-Path $currentJunction "start-$($svc.Name).bat"
             if (Test-Path $batPath) {
                 & $nssmExe set $svc.Name Application "$batPath" 2>&1 | Out-Null
-                & $nssmExe set $svc.Name AppDirectory "$currentJunction" 2>&1 | Out-Null
+                & $nssmExe set $svc.Name AppDirectory "$BaseInstallPath" 2>&1 | Out-Null
             }
         }
 
