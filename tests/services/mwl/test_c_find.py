@@ -114,7 +114,12 @@ class TestCFind:
         list(handler.call(mock_event))
 
         mock_storage.find_worklist_items.assert_called_once_with(
-            accession_number="ACC12345", modality=None, scheduled_date=None, scheduled_time=None, patient_id=None
+            accession_number="ACC12345",
+            modality=None,
+            scheduled_date=None,
+            scheduled_time=None,
+            patient_id=None,
+            patient_name=None,
         )
 
     def test_call_with_modality_filter(self, handler, mock_storage, mock_event):
@@ -127,7 +132,12 @@ class TestCFind:
         list(handler.call(mock_event))
 
         mock_storage.find_worklist_items.assert_called_once_with(
-            accession_number=None, modality="MG", scheduled_date=None, scheduled_time=None, patient_id=None
+            accession_number=None,
+            modality="MG",
+            scheduled_date=None,
+            scheduled_time=None,
+            patient_id=None,
+            patient_name=None,
         )
 
     def test_call_with_date_filter(self, handler, mock_storage, mock_event):
@@ -139,7 +149,12 @@ class TestCFind:
         list(handler.call(mock_event))
 
         mock_storage.find_worklist_items.assert_called_once_with(
-            accession_number=None, modality=None, scheduled_date="20260107", scheduled_time=None, patient_id=None
+            accession_number=None,
+            modality=None,
+            scheduled_date="20260107",
+            scheduled_time=None,
+            patient_id=None,
+            patient_name=None,
         )
 
     def test_call_with_time_filter(self, handler, mock_storage, mock_event):
@@ -151,7 +166,12 @@ class TestCFind:
         list(handler.call(mock_event))
 
         mock_storage.find_worklist_items.assert_called_once_with(
-            accession_number=None, modality=None, scheduled_date=None, scheduled_time="100000", patient_id=None
+            accession_number=None,
+            scheduled_time="100000",
+            modality=None,
+            scheduled_date=None,
+            patient_id=None,
+            patient_name=None,
         )
 
     def test_call_with_patient_id_filter(self, handler, mock_storage, mock_event):
@@ -161,7 +181,27 @@ class TestCFind:
         list(handler.call(mock_event))
 
         mock_storage.find_worklist_items.assert_called_once_with(
-            accession_number=None, modality=None, scheduled_date=None, scheduled_time=None, patient_id="9876543210"
+            accession_number=None,
+            modality=None,
+            scheduled_time=None,
+            scheduled_date=None,
+            patient_id="9876543210",
+            patient_name=None,
+        )
+
+    def test_call_with_patient_name_filter(self, handler, mock_storage, mock_event):
+        mock_event.identifier.PatientName = "Smith*"
+        mock_storage.find_worklist_items.return_value = []
+
+        list(handler.call(mock_event))
+
+        mock_storage.find_worklist_items.assert_called_once_with(
+            accession_number=None,
+            modality=None,
+            scheduled_date=None,
+            scheduled_time=None,
+            patient_id=None,
+            patient_name="Smith*",
         )
 
     def test_call_handles_storage_exception(self, handler, mock_storage, mock_event):
