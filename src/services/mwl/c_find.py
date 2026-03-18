@@ -44,12 +44,14 @@ class CFind:
         query_modality = procedure_sequence[0].get("Modality")
         query_date = procedure_sequence[0].get("ScheduledProcedureStepStartDate")
         query_accession_number = identifier.get("AccessionNumber")
+        query_time = procedure_sequence[0].get("ScheduledProcedureStepStartTime")
 
         try:
             items = self.storage.find_worklist_items(
                 accession_number=query_accession_number if query_accession_number else None,
                 modality=query_modality if query_modality else None,
                 scheduled_date=query_date if query_date else None,
+                scheduled_time=query_time if query_time else None,
                 patient_id=query_patient_id if query_patient_id else None,
             )
 

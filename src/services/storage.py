@@ -367,6 +367,7 @@ class MWLStorage(Storage):
         accession_number: Optional[str] = None,
         modality: Optional[str] = None,
         scheduled_date: Optional[str] = None,
+        scheduled_time: Optional[str] = None,
         patient_id: Optional[str] = None,
     ) -> List[WorklistItem]:
         """
@@ -375,7 +376,8 @@ class MWLStorage(Storage):
         Args:
             accession_number: Filter by accession number
             modality: Filter by modality (e.g., "MG")
-            scheduled_date: Filter by scheduled date (YYYYMMDD)
+            scheduled_date: Filter by scheduled date (YYYYMMDD, or range like "20240101-20240131")
+            scheduled_time: Filter by scheduled time (HHMMSS, or range like "080000-170000")
             patient_id: Filter by patient ID
 
         Returns:
@@ -399,8 +401,14 @@ class MWLStorage(Storage):
             params.append(modality)
 
         if scheduled_date:
-            where_clauses.append("scheduled_date = ?")
-            params.append(scheduled_date)
+            where_clause, clause_params = self.scheduled_query_clause("scheduled_date", scheduled_date)
+            where_clauses.append(where_clause)
+            params.extend(clause_params)
+
+        if scheduled_time:
+            where_clause, clause_params = self.scheduled_query_clause("scheduled_time", scheduled_time)
+            where_clauses.append(where_clause)
+            params.extend(clause_params)
 
         if patient_id:
             where_clauses.append("patient_id = ?")
@@ -415,6 +423,27 @@ class MWLStorage(Storage):
             cursor = conn.execute(query, params)
 
             return [WorklistItem(**row) for row in cursor.fetchall()]
+
+    def scheduled_query_clause(self, param_name: str, param_value: str) -> tuple[str, List[str]]:
+        """
+        Helper to build SQL clause for scheduled date/time parameters.
+
+        Args:
+            param_name: "scheduled_date" or "scheduled_time"
+            param_value: Value to filter by (e.g., "20240101", "20240101-20240131", "-20240131", "20240101-")
+
+        Returns:
+            Tuple of (SQL clause string, list of parameters)
+        """
+        if param_value.endswith("-"):
+            return f"{param_name} >= ?", [param_value[:-1].strip()]
+        elif param_value.startswith("-"):
+            return f"{param_name} <= ?", [param_value[1:].strip()]
+        elif "-" in param_value:
+            start, end = [s.strip() for s in param_value.split("-", 1)]
+            return f"{param_name} >= ? AND {param_name} <= ?", [start, end]
+        else:
+            return f"{param_name} = ?", [param_value.strip()]
 
     def get_worklist_item(self, accession_number: str) -> Optional[WorklistItem]:
         """
