@@ -215,23 +215,45 @@ class TestCFind:
         assert status == FAILURE
         assert ds is None
 
-    def test_build_worklist_response_missing_optional_fields(self, handler):
-        minimal_item = WorklistItem(
-            accession_number="ACC001",
-            patient_id="9876543210",
-            patient_name="TEST^PATIENT",
-            patient_birth_date="19800101",
-            scheduled_date="20260107",
-            scheduled_time="100000",
-            modality="MG",
-        )
+    def test_call_return_key_attributes_present(self, handler, mock_storage, mock_event, sample_worklist_item):
+        worklist_item = WorklistItem(**sample_worklist_item)
+        mock_storage.find_worklist_items.return_value = [worklist_item]
 
-        ds = handler._build_worklist_response(minimal_item)
+        results = list(handler.call(mock_event))
 
-        # Required fields present
+        assert len(results) == 2
+        status, ds = results[0]
+        assert status == PENDING
         assert ds.PatientID == "9876543210"
         assert ds.AccessionNumber == "ACC001"
-        # Optional fields absent
-        assert not hasattr(ds, "PatientSex")
-        assert not hasattr(ds, "StudyInstanceUID")
-        assert not hasattr(ds, "StudyDescription")
+        assert ds.PatientName == "TEST^PATIENT"
+        assert ds.PatientBirthDate == "19800101"
+
+        assert ds.PatientAddress is None
+        assert ds.PatientComments is None
+        assert ds.PatientWeight is None
+        assert ds.PatientAge is None
+        assert ds.PatientSex == "F"
+
+        assert ds.StudyDescription == "Bilateral Screening Mammogram"
+        assert ds.StudyInstanceUID == "1.2.3.4.5"  # gitleaks:allow
+
+        scheduled_procedure_step = ds.ScheduledProcedureStepSequence[0]
+
+        assert scheduled_procedure_step.Modality == "MG"
+        assert scheduled_procedure_step.ScheduledProcedureStepStartDate == "20260107"
+        assert scheduled_procedure_step.ScheduledProcedureStepStartTime == "100000"
+        assert scheduled_procedure_step.ScheduledProcedureStepID == "PROC001"
+        assert scheduled_procedure_step.ScheduledStationAETitle is None
+        assert scheduled_procedure_step.ScheduledStationName is None
+        assert scheduled_procedure_step.ScheduledProtocolCodeSequence[0].CodeValue is None
+        assert scheduled_procedure_step.ScheduledProtocolCodeSequence[0].CodingSchemeDesignator is None
+        assert scheduled_procedure_step.ScheduledProtocolCodeSequence[0].CodeMeaning is None
+
+        assert ds.ReasonForRequestedProcedureCodeSequence[0].CodeValue is None
+        assert ds.ReasonForRequestedProcedureCodeSequence[0].CodingSchemeDesignator is None
+        assert ds.ReasonForRequestedProcedureCodeSequence[0].CodeMeaning is None
+
+        assert ds.RequestedProcedureCodeSequence[0].CodeValue == "PROC001"
+        assert ds.RequestedProcedureCodeSequence[0].CodingSchemeDesignator is None
+        assert ds.RequestedProcedureCodeSequence[0].CodeMeaning is None

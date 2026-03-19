@@ -88,26 +88,47 @@ class CFind:
         ds.PatientID = item.patient_id
         ds.PatientName = item.patient_name
         ds.PatientBirthDate = item.patient_birth_date
-        if item.patient_sex:
-            ds.PatientSex = item.patient_sex
+        ds.PatientSex = item.patient_sex
+        ds.PatientAge = item.patient_age
+        ds.PatientWeight = item.patient_weight
+        ds.PatientAddress = item.patient_address
+        ds.PatientComments = item.patient_comments
 
         # Study information
         ds.AccessionNumber = item.accession_number
-        if item.study_instance_uid:
-            ds.StudyInstanceUID = item.study_instance_uid
+        ds.StudyInstanceUID = item.study_instance_uid
 
-        if item.study_description:
-            ds.StudyDescription = item.study_description
-            sps_item.ScheduledProcedureStepDescription = ds.StudyDescription
+        ds.StudyDescription = item.study_description
+        sps_item.ScheduledProcedureStepDescription = ds.StudyDescription
 
-        if item.procedure_code:
-            ds.RequestedProcedureID = item.procedure_code
-            sps_item.ScheduledProcedureStepID = ds.RequestedProcedureID
+        ds.RequestedProcedureID = item.procedure_code
+
+        ds.RequestedProcedureCodeSequence = [Dataset()]
+        ds.RequestedProcedureCodeSequence[0].CodeValue = item.procedure_code
+        ds.RequestedProcedureCodeSequence[0].CodingSchemeDesignator = item.procedure_coding_scheme_designator
+        ds.RequestedProcedureCodeSequence[0].CodeMeaning = item.procedure_code_meaning
+
+        ds.ReasonForRequestedProcedureCodeSequence = [Dataset()]
+        ds.ReasonForRequestedProcedureCodeSequence[0].CodeValue = item.reason_code_value
+        ds.ReasonForRequestedProcedureCodeSequence[0].CodingSchemeDesignator = item.reason_coding_scheme_designator
+        ds.ReasonForRequestedProcedureCodeSequence[0].CodeMeaning = item.reason_code_meaning
+
+        sps_item.ScheduledProcedureStepID = ds.RequestedProcedureID
 
         # Scheduled Procedure Step Sequence
         sps_item.ScheduledProcedureStepStartDate = item.scheduled_date
         sps_item.ScheduledProcedureStepStartTime = item.scheduled_time
         sps_item.Modality = item.modality
+        sps_item.ScheduledStationAETitle = item.scheduled_station_aet
+        sps_item.ScheduledPerformingPhysicianName = item.scheduled_performing_physician_name
+        sps_item.ScheduledStationName = item.scheduled_station_name
+        sps_item.ScheduledProcedureStepLocation = item.scheduled_procedure_step_location
+        sps_item.ScheduledProtocolCodeSequence = [Dataset()]
+        sps_item.ScheduledProtocolCodeSequence[0].CodeValue = item.scheduled_protocol_code_value
+        sps_item.ScheduledProtocolCodeSequence[
+            0
+        ].CodingSchemeDesignator = item.scheduled_protocol_coding_scheme_designator
+        sps_item.ScheduledProtocolCodeSequence[0].CodeMeaning = item.scheduled_protocol_code_meaning
 
         ds.ScheduledProcedureStepSequence = [sps_item]
 
