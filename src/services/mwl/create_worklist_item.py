@@ -1,6 +1,7 @@
 import logging
 
-from services.storage import DuplicateWorklistItemError, MWLStorage, WorklistItem
+from models import WorklistItem
+from services.storage import DuplicateWorklistItemError, MWLStorage
 
 logger = logging.getLogger(__name__)
 

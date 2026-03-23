@@ -5,8 +5,8 @@ import pytest
 from websockets.exceptions import ConnectionClosedError
 from websockets.frames import Close, CloseCode
 
+from models import WorklistItem
 from relay_listener import RelayListener, RelayURI, main
-from services.storage import WorklistItem
 
 
 class TestRelayListener:

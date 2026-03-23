@@ -10,8 +10,9 @@ from typing import Iterator, Tuple
 from pydicom import Dataset
 from pynetdicom import evt
 
+from models import WorklistItem
 from services.dicom import CHARSET_UTF8, FAILURE, PENDING, SUCCESS
-from services.storage import MWLStorage, WorklistItem
+from services.storage import MWLStorage
 
 logger = logging.getLogger(__name__)
 
