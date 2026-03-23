@@ -27,6 +27,7 @@ jobs:
   deploy-stage:
     name: Deploy stage
     needs: [commit-stage, test-stage]
+    if: contains(github.event.pull_request.labels.*.name, 'deploy')
     permissions:
       id-token: write
     uses: ./.github/workflows/stage-4-deploy.yaml
