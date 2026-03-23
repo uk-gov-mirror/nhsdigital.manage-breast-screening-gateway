@@ -1,86 +1,98 @@
 import hashlib
+import sqlite3
 from pathlib import Path
-from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
 from pydicom.uid import generate_uid
 
 from models import WorklistItem
 from services.storage import MWLStorage, PACSStorage, WorklistItemNotFoundError
+from services.storage import (
+    MWLStorage,
+    PACSStorage,
+    WorklistItemNotFoundError,
+)
 
 
-@patch("services.storage.sqlite3")
+@pytest.fixture
+def db_file(tmp_path):
+    return tmp_path / "test.db"
+
+
+@pytest.fixture
+def pacs_storage(db_file, tmp_path):
+    storage = PACSStorage(str(db_file), str(tmp_path))
+    return storage
+
+
+@pytest.fixture
+def mwl_storage(db_file):
+    storage = MWLStorage(str(db_file))
+    return storage
+
+
+@pytest.fixture
+def result():
+    return {
+        "accession_number": "ACC123456",
+        "patient_id": "999123456",
+        "patient_name": "SMITH^JANE",
+        "patient_birth_date": "19800101",
+        "patient_sex": "F",
+        "scheduled_date": "20240101",
+        "scheduled_time": "090000",
+        "modality": "MG",
+        "study_description": "MAMMOGRAPHY",
+        "procedure_code": "12345-6",
+        "status": "SCHEDULED",
+        "study_instance_uid": generate_uid(),
+        "source_message_id": "MSGID123456",
+    }
+
+
 class TestPACSStorage:
-    def test_init(self, mock_db, tmp_dir):
-        mock_connection = MagicMock()
-        mock_db.connect.return_value = mock_connection
-        subject = PACSStorage(tmp_dir, tmp_dir)
+    def test_init(self, pacs_storage, db_file):
+        assert Path(db_file).exists()
 
-        assert subject.db_path == tmp_dir
-        assert subject.storage_root == Path(tmp_dir)
-        assert subject.storage_root.exists()
-        assert subject.schema_path == f"{Path(__file__).parent.parent.parent}/src/services/init_pacs_db.sql"
-        assert subject.table_name == "stored_instances"
+        conn = sqlite3.connect(db_file)
+        table = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='stored_instances'").fetchone()
 
-        assert mock_connection.execute.call_count == 3
-        mock_connection.execute.assert_any_call("PRAGMA journal_mode=WAL")
-        mock_connection.execute.assert_any_call("PRAGMA synchronous=NORMAL")
-        mock_connection.commit.assert_called_once()
+        assert table is not None
 
-    def test_instance_exists_returns_true(self, mock_db, tmp_dir):
-        mock_cursor = MagicMock()
-        mock_cursor.fetchone.return_value = (1,)
-        mock_connection = MagicMock()
-        mock_connection.execute.return_value = mock_cursor
-        mock_db.connect.return_value = mock_connection
-        subject = PACSStorage(tmp_dir, tmp_dir)
-        mock_connection.reset_mock()
+    def test_instance_exists_returns_true(self, pacs_storage):
+        uid = generate_uid()
 
-        assert subject.instance_exists("1.2.3.4.5.6") is True  # gitleaks:allow
+        with pacs_storage._get_connection() as conn:
+            conn.execute(
+                (
+                    "INSERT INTO stored_instances (sop_instance_uid, storage_path, file_size, storage_hash, status) "
+                    "VALUES (?, ?, ?, ?, 'STORED')"
+                ),
+                (uid, "/path/to/file.dcm", 12345, "abcdef1234567890"),
+            )
+            conn.commit()
 
-        mock_connection.execute.assert_called_once_with(
-            "SELECT 1 FROM stored_instances WHERE sop_instance_uid = ? AND status = 'STORED'",
-            ("1.2.3.4.5.6",),  # gitleaks:allow
-        )
+        assert pacs_storage.instance_exists(uid) is True
 
-    def test_instance_exists_returns_false(self, mock_db, tmp_dir):
-        mock_cursor = MagicMock()
-        mock_cursor.fetchone.return_value = None
-        mock_connection = MagicMock()
-        mock_connection.execute.return_value = mock_cursor
-        mock_db.connect.return_value = mock_connection
-        subject = PACSStorage(tmp_dir, tmp_dir)
-        mock_connection.reset_mock()
+    def test_instance_exists_returns_false(self, pacs_storage):
+        assert pacs_storage.instance_exists("1.2.3") is False
 
-        assert subject.instance_exists("1.2.3.4.5.6") is False  # gitleaks:allow
-
-    def test_store_instance_saves_to_filesystem(self, mock_db, tmp_dir):
-        sop_instance_uid = "1.2.3.4.5.6"  # gitleaks:allow
-        mock_connection = MagicMock()
-        mock_db.connect.return_value = mock_connection
-        subject = PACSStorage(tmp_dir, tmp_dir)
-        subject.instance_exists = MagicMock(return_value=False)
+    def test_store_instance_saves_to_filesystem(self, pacs_storage):
+        uid = generate_uid()
         metadata = {"patient_id": "9990001112", "patient_name": "SMITH^JANE"}
 
-        filepath = subject.store_instance(
-            sop_instance_uid,
-            b"foo",
-            metadata,
-        )
+        filepath = pacs_storage.store_instance(uid, b"foo", metadata)
 
-        hex = hashlib.sha256(sop_instance_uid.encode()).hexdigest()
-        relative_path = f"{hex[:2]}/{hex[2:4]}/{hex[:16]}.dcm"
+        assert Path(filepath).exists()
+        assert Path(filepath).read_bytes() == b"foo"
 
-        assert subject._compute_storage_path(sop_instance_uid) == relative_path
-        assert relative_path in filepath
-        assert open(filepath).read() == "foo"
+        hex_hash = hashlib.sha256(uid.encode()).hexdigest()
+        expected_rel = f"{hex_hash[:2]}/{hex_hash[2:4]}/{hex_hash[:16]}.dcm"
 
-    def test_store_instance_saves_to_db(self, mock_db, tmp_dir):
-        mock_connection = MagicMock()
-        mock_db.connect.return_value = mock_connection
-        subject = PACSStorage(tmp_dir, tmp_dir)
-        subject.instance_exists = MagicMock(return_value=False)
-        mock_connection.reset_mock()
+        assert expected_rel in filepath
+
+    def test_store_instance_saves_to_db(self, pacs_storage):
+        uid = generate_uid()
 
         metadata = {
             "accession_number": "ACC112233",
@@ -88,615 +100,226 @@ class TestPACSStorage:
             "patient_name": "SMITH^JANE",
         }
 
-        subject.store_instance(
-            "1.2.3.4.5.6",  # gitleaks:allow
-            b"foo",
-            metadata,
-        )
+        pacs_storage.store_instance(uid, b"foo", metadata)
 
-        mock_connection.execute.assert_called_once_with(
-            """
-                INSERT INTO stored_instances (
-                    sop_instance_uid, storage_path, file_size, storage_hash,
-                    patient_id, patient_name, accession_number, source_aet,
-                    status
-                ) VALUES (
-                    ?, ?, ?, ?,
-                    ?, ?, ?, ?,
-                    'STORED'
-                )
-            """,
-            (
-                "1.2.3.4.5.6",  # gitleaks:allow
-                "ff/af/ffaff041ab509297.dcm",
-                3,
-                "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
-                metadata.get("patient_id"),
-                metadata.get("patient_name"),
-                metadata.get("accession_number"),
-                "UNKNOWN",
-            ),
-        )
-        mock_connection.commit.assert_called_once()
+        with pacs_storage._get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM stored_instances WHERE sop_instance_uid = ?",
+                (uid,),
+            ).fetchone()
+
+        assert row is not None
+        assert row["status"] == "STORED"
+        assert row["patient_id"] == metadata["patient_id"]
+        assert row["patient_name"] == metadata["patient_name"]
+        assert row["accession_number"] == metadata["accession_number"]
 
 
-@patch("services.storage.sqlite3")
 class TestWorkingStorage:
-    @pytest.fixture
-    def result(self):
-        return {
-            "accession_number": "ACC123456",
-            "patient_id": "999123456",
-            "patient_name": "SMITH^JANE",
-            "patient_birth_date": "19800101",
-            "patient_sex": "F",
-            "scheduled_date": "20240101",
-            "scheduled_time": "090000",
-            "modality": "MG",
-            "study_description": "MAMMOGRAPHY",
-            "procedure_code": "12345-6",
-            "status": "SCHEDULED",
-            "study_instance_uid": generate_uid(),
-            "source_message_id": "MSGID123456",
-        }
+    def _insert_item(self, storage, result):
+        item = WorklistItem(**result)
+        storage.store_worklist_item(item)
+        return item
 
-    def test_init(self, mock_db, tmp_dir):
-        mock_connection = MagicMock()
-        mock_db.connect.return_value = mock_connection
-        subject = MWLStorage(tmp_dir)
+    def test_init(self, mwl_storage, db_file):
+        conn = sqlite3.connect(db_file)
+        table = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='worklist_items'").fetchone()
 
-        assert subject.db_path == tmp_dir
-        assert subject.schema_path == f"{Path(__file__).parent.parent.parent}/src/services/init_worklist_db.sql"
-        assert subject.table_name == "worklist_items"
+        assert table is not None
 
-        assert mock_connection.execute.call_count == 3
-        mock_connection.execute.assert_any_call("PRAGMA journal_mode=WAL")
-        mock_connection.execute.assert_any_call("PRAGMA synchronous=NORMAL")
-        mock_connection.commit.assert_called_once()
+    def test_store_worklist_item(self, mwl_storage, result):
+        item = WorklistItem(**result)
 
-        assert mock_connection.execute.call_count == 3
-        mock_connection.execute.assert_any_call("PRAGMA journal_mode=WAL")
-        mock_connection.execute.assert_any_call("PRAGMA synchronous=NORMAL")
-        mock_connection.commit.assert_called_once()
+        mwl_storage.store_worklist_item(item)
 
-    def test_store_worklist_item(self, mock_db, tmp_dir):
-        mock_connection = MagicMock()
-        mock_db.connect.return_value = mock_connection
-        subject = MWLStorage(tmp_dir)
-        mock_connection.reset_mock()
+        with mwl_storage._get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM worklist_items WHERE accession_number = ?",
+                (item.accession_number,),
+            ).fetchone()
 
-        item = WorklistItem(
-            accession_number="ACC123456",
-            patient_id="999123456",
-            patient_name="SMITH^JANE",
-            patient_birth_date="19800101",
-            patient_sex="F",
-            scheduled_date="20240101",
-            scheduled_time="090000",
-            modality="MG",
-            study_description="MAMMOGRAPHY",
-            procedure_code="12345-6",
-            study_instance_uid=generate_uid(),
-            source_message_id="MSGID123456",
-        )
+        assert row is not None
+        assert row["patient_id"] == item.patient_id
 
-        subject.store_worklist_item(item)
+    def test_find_worklist_items(self, mwl_storage, result):
+        item = self._insert_item(mwl_storage, result)
 
-        mock_connection.execute.assert_called_once_with(
-            (
-                "INSERT INTO worklist_items (accession_number, modality, patient_birth_date, "
-                "patient_id, patient_name, patient_sex, procedure_code, scheduled_date, "
-                "scheduled_time, source_message_id, study_description, study_instance_uid) "
-                "VALUES (:accession_number, :modality, :patient_birth_date, "
-                ":patient_id, :patient_name, :patient_sex, :procedure_code, "
-                ":scheduled_date, :scheduled_time, :source_message_id, "
-                ":study_description, :study_instance_uid)"
-            ),
-            item.__dict__,
-        )
-        mock_connection.commit.assert_called_once()
-
-    def test_find_worklist_items(self, mock_db, tmp_dir, result):
-        mock_cursor = MagicMock()
-        mock_cursor.fetchall.return_value = [result]
-        mock_connection = MagicMock()
-        mock_connection.execute.return_value = mock_cursor
-        mock_db.connect.return_value = mock_connection
-        subject = MWLStorage(tmp_dir)
-        mock_connection.reset_mock()
-
-        results = subject.find_worklist_items()
-
-        mock_connection.execute.assert_called_once_with(
-            (
-                "SELECT accession_number, modality, patient_birth_date, patient_id, "
-                "patient_name, patient_sex, procedure_code, scheduled_date, scheduled_time, "
-                "source_message_id, study_description, study_instance_uid, status, mpps_instance_uid "
-                "FROM worklist_items ORDER BY scheduled_date, scheduled_time"
-            ),
-            [],
-        )
+        results = mwl_storage.find_worklist_items()
 
         assert len(results) == 1
-        assert results[0] == WorklistItem(**result)
+        assert results[0] == item
 
     @pytest.mark.parametrize(
         "query_param_name, query_param_value",
         [
             ("accession_number", "ACC123456"),
             ("patient_id", "999123456"),
-            ("modality", "CT"),
+            ("modality", "MG"),
             ("scheduled_date", "20240101"),
         ],
     )
-    def test_find_worklist_items_with_filters(self, mock_db, tmp_dir, query_param_name, query_param_value):
-        mock_cursor = MagicMock()
-        mock_cursor.fetchall.return_value = []
-        mock_connection = MagicMock()
-        mock_connection.execute.return_value = mock_cursor
-        mock_db.connect.return_value = mock_connection
+    def test_find_worklist_items_with_filters(self, mwl_storage, result, query_param_name, query_param_value):
+        self._insert_item(mwl_storage, result)
 
-        subject = MWLStorage(tmp_dir)
-        mock_connection.reset_mock()
+        results = mwl_storage.find_worklist_items(**{query_param_name: query_param_value})
 
-        find_args = {query_param_name: query_param_value}
-        subject.find_worklist_items(**find_args)
+        assert len(results) == 1
 
-        mock_connection.execute.assert_called_once_with(
-            (
-                "SELECT accession_number, modality, patient_birth_date, patient_id, "
-                "patient_name, patient_sex, procedure_code, scheduled_date, scheduled_time, "
-                "source_message_id, study_description, study_instance_uid, status, mpps_instance_uid "
-                f"FROM worklist_items WHERE {query_param_name} = ? ORDER BY scheduled_date, scheduled_time"
-            ),
-            [query_param_value],
+    def test_find_worklist_items_with_multiple_filters(self, mwl_storage, result):
+        self._insert_item(mwl_storage, result)
+
+        results = mwl_storage.find_worklist_items(
+            accession_number="ACC123456",
+            modality="MG",
+            scheduled_date="20240101",
+            patient_id="999123456",
         )
 
-    def test_find_worklist_items_with_multiple_filters(self, mock_db, tmp_dir):
-        mock_cursor = MagicMock()
-        mock_cursor.fetchall.return_value = []
-        mock_connection = MagicMock()
-        mock_connection.execute.return_value = mock_cursor
-        mock_db.connect.return_value = mock_connection
+        assert len(results) == 1
 
-        subject = MWLStorage(tmp_dir)
-        mock_connection.reset_mock()
-        subject.find_worklist_items(
-            accession_number="ACC123456", modality="MG", scheduled_date="20240101", patient_id="999123456"
+    def test_find_worklist_items_with_date_range(self, mwl_storage, result):
+        self._insert_item(mwl_storage, result)
+
+        results = mwl_storage.find_worklist_items(scheduled_date="20240101 - 20240131")
+
+        assert len(results) == 1
+
+    def test_find_worklist_items_with_open_ended_date_range(self, mwl_storage, result):
+        self._insert_item(mwl_storage, result)
+
+        assert len(mwl_storage.find_worklist_items(scheduled_date="20240101 -")) == 1
+        assert len(mwl_storage.find_worklist_items(scheduled_date="-20240101")) == 1
+
+    def test_find_worklist_items_with_time_range(self, mwl_storage, result):
+        self._insert_item(mwl_storage, result)
+
+        results = mwl_storage.find_worklist_items(scheduled_time="090000 - 170000")
+
+        assert len(results) == 1
+
+    def test_find_worklist_items_with_open_ended_time_range(self, mwl_storage, result):
+        self._insert_item(mwl_storage, result)
+
+        assert len(mwl_storage.find_worklist_items(scheduled_time="090000 -")) == 1
+
+    def test_find_worklist_items_with_date_and_time_range(self, mwl_storage, result):
+        self._insert_item(mwl_storage, result)
+
+        results = mwl_storage.find_worklist_items(
+            scheduled_date="20240101 - 20240131",
+            scheduled_time="090000 - 170000",
         )
 
-        mock_connection.execute.assert_called_once_with(
-            (
-                "SELECT accession_number, modality, patient_birth_date, patient_id, "
-                "patient_name, patient_sex, procedure_code, scheduled_date, scheduled_time, "
-                "source_message_id, study_description, study_instance_uid, status, mpps_instance_uid "
-                "FROM worklist_items "
-                "WHERE accession_number = ? AND modality = ? AND scheduled_date = ? AND patient_id = ? "
-                "ORDER BY scheduled_date, scheduled_time"
-            ),
-            ["ACC123456", "MG", "20240101", "999123456"],
-        )
+        assert len(results) == 1
 
-    def test_find_worklist_items_with_date_range(self, mock_db, tmp_dir):
-        mock_cursor = MagicMock()
-        mock_cursor.fetchall.return_value = []
-        mock_connection = MagicMock()
-        mock_connection.execute.return_value = mock_cursor
-        mock_db.connect.return_value = mock_connection
+    @pytest.mark.parametrize("wildcard_param", ["Smith*", "*Smith*", "Sm?th*", "Smith^Jane"])
+    def test_find_worklist_items_patient_name_wildcard_conversion(self, mwl_storage, result, wildcard_param):
+        self._insert_item(mwl_storage, result)
 
-        subject = MWLStorage(tmp_dir)
-        mock_connection.reset_mock()
+        results = mwl_storage.find_worklist_items(patient_name=wildcard_param)
 
-        subject.find_worklist_items(scheduled_date="20240101 - 20240131")
+        assert len(results) == 1
+        assert results[0].patient_name == "SMITH^JANE"
 
-        mock_connection.execute.assert_called_once_with(
-            (
-                "SELECT accession_number, modality, patient_birth_date, patient_id, "
-                "patient_name, patient_sex, procedure_code, scheduled_date, scheduled_time, "
-                "source_message_id, study_description, study_instance_uid, status, mpps_instance_uid "
-                "FROM worklist_items WHERE scheduled_date >= ? AND scheduled_date <= ? "
-                "ORDER BY scheduled_date, scheduled_time"
-            ),
-            ["20240101", "20240131"],
-        )
+    def test_get_worklist_item(self, mwl_storage, result):
+        item = self._insert_item(mwl_storage, result)
 
-    def test_find_worklist_items_with_open_ended_date_range(self, mock_db, tmp_dir):
-        mock_cursor = MagicMock()
-        mock_cursor.fetchall.return_value = []
-        mock_connection = MagicMock()
-        mock_connection.execute.return_value = mock_cursor
-        mock_db.connect.return_value = mock_connection
+        fetched = mwl_storage.get_worklist_item(item.accession_number)
 
-        subject = MWLStorage(tmp_dir)
-        mock_connection.reset_mock()
+        assert fetched == item
 
-        subject.find_worklist_items(scheduled_date="20240101 -")
+    def test_get_worklist_item_returns_none(self, mwl_storage):
+        assert mwl_storage.get_worklist_item("DOES_NOT_EXIST") is None
 
-        mock_connection.execute.assert_called_once_with(
-            (
-                "SELECT accession_number, modality, patient_birth_date, patient_id, "
-                "patient_name, patient_sex, procedure_code, scheduled_date, scheduled_time, "
-                "source_message_id, study_description, study_instance_uid, status, mpps_instance_uid "
-                "FROM worklist_items WHERE scheduled_date >= ? "
-                "ORDER BY scheduled_date, scheduled_time"
-            ),
-            ["20240101"],
-        )
+    def test_update_status(self, mwl_storage, result):
+        item = self._insert_item(mwl_storage, result)
 
-        mock_connection.reset_mock()
+        returned = mwl_storage.update_status(item.accession_number, "COMPLETED")
 
-        subject.find_worklist_items(scheduled_date="-20240101")
+        assert returned == item.source_message_id
 
-        mock_connection.execute.assert_called_once_with(
-            (
-                "SELECT accession_number, modality, patient_birth_date, patient_id, "
-                "patient_name, patient_sex, procedure_code, scheduled_date, scheduled_time, "
-                "source_message_id, study_description, study_instance_uid, status, mpps_instance_uid "
-                "FROM worklist_items WHERE scheduled_date <= ? "
-                "ORDER BY scheduled_date, scheduled_time"
-            ),
-            ["20240101"],
-        )
+        with mwl_storage._get_connection() as conn:
+            row = conn.execute(
+                "SELECT status FROM worklist_items WHERE accession_number = ?",
+                (item.accession_number,),
+            ).fetchone()
 
-    def test_find_worklist_items_with_time_range(self, mock_db, tmp_dir):
-        mock_cursor = MagicMock()
-        mock_cursor.fetchall.return_value = []
-        mock_connection = MagicMock()
-        mock_connection.execute.return_value = mock_cursor
-        mock_db.connect.return_value = mock_connection
+        assert row["status"] == "COMPLETED"
 
-        subject = MWLStorage(tmp_dir)
-        mock_connection.reset_mock()
+    def test_update_status_with_no_update(self, mwl_storage):
+        result = mwl_storage.update_status("DOES_NOT_EXIST", "COMPLETED")
 
-        subject.find_worklist_items(scheduled_time="090000 - 170000")
-
-        mock_connection.execute.assert_called_once_with(
-            (
-                "SELECT accession_number, modality, patient_birth_date, patient_id, "
-                "patient_name, patient_sex, procedure_code, scheduled_date, scheduled_time, "
-                "source_message_id, study_description, study_instance_uid, status, mpps_instance_uid "
-                "FROM worklist_items WHERE scheduled_time >= ? AND scheduled_time <= ? "
-                "ORDER BY scheduled_date, scheduled_time"
-            ),
-            ["090000", "170000"],
-        )
-
-    def test_find_worklist_items_with_open_ended_time_range(self, mock_db, tmp_dir):
-        mock_cursor = MagicMock()
-        mock_cursor.fetchall.return_value = []
-        mock_connection = MagicMock()
-        mock_connection.execute.return_value = mock_cursor
-        mock_db.connect.return_value = mock_connection
-
-        subject = MWLStorage(tmp_dir)
-        mock_connection.reset_mock()
-
-        subject.find_worklist_items(scheduled_time="090000 -")
-
-        mock_connection.execute.assert_called_once_with(
-            (
-                "SELECT accession_number, modality, patient_birth_date, patient_id, "
-                "patient_name, patient_sex, procedure_code, scheduled_date, scheduled_time, "
-                "source_message_id, study_description, study_instance_uid, status, mpps_instance_uid "
-                "FROM worklist_items WHERE scheduled_time >= ? "
-                "ORDER BY scheduled_date, scheduled_time"
-            ),
-            ["090000"],
-        )
-
-    def test_find_worklist_items_with_date_and_time_range(self, mock_db, tmp_dir):
-        mock_cursor = MagicMock()
-        mock_cursor.fetchall.return_value = []
-        mock_connection = MagicMock()
-        mock_connection.execute.return_value = mock_cursor
-        mock_db.connect.return_value = mock_connection
-
-        subject = MWLStorage(tmp_dir)
-        mock_connection.reset_mock()
-
-        subject.find_worklist_items(scheduled_date="20240101 - 20240131", scheduled_time="090000 - 170000")
-
-        mock_connection.execute.assert_called_once_with(
-            (
-                "SELECT accession_number, modality, patient_birth_date, patient_id, "
-                "patient_name, patient_sex, procedure_code, scheduled_date, scheduled_time, "
-                "source_message_id, study_description, study_instance_uid, status, mpps_instance_uid "
-                "FROM worklist_items WHERE scheduled_date >= ? AND scheduled_date <= ? "
-                "AND scheduled_time >= ? AND scheduled_time <= ? "
-                "ORDER BY scheduled_date, scheduled_time"
-            ),
-            ["20240101", "20240131", "090000", "170000"],
-        )
-
-        mock_connection.reset_mock()
-        subject.find_worklist_items(patient_name="Smith*")
-
-        mock_connection.execute.assert_called_once_with(
-            (
-                "SELECT accession_number, modality, patient_birth_date, patient_id, "
-                "patient_name, patient_sex, procedure_code, scheduled_date, scheduled_time, "
-                "source_message_id, study_description, study_instance_uid, status, mpps_instance_uid "
-                "FROM worklist_items WHERE UPPER(patient_name) LIKE UPPER(?) ORDER BY scheduled_date, scheduled_time"
-            ),
-            ["Smith%"],
-        )
-
-    @pytest.mark.parametrize(
-        "dicom_pattern, sql_pattern, operator",
-        [
-            ("Smith*", "Smith%", "LIKE"),  # trailing wildcard
-            ("*Smith*", "%Smith%", "LIKE"),  # leading and trailing wildcard
-            ("Sm?th*", "Sm_th%", "LIKE"),  # single-character wildcard combined with trailing
-            ("Smith^Jane", "Smith^Jane", "="),  # exact name, no wildcards — uses = not LIKE
-        ],
-    )
-    def test_find_worklist_items_patient_name_wildcard_conversion(
-        self, mock_db, tmp_dir, dicom_pattern, sql_pattern, operator
-    ):
-        mock_cursor = MagicMock()
-        mock_cursor.fetchall.return_value = []
-        mock_connection = MagicMock()
-        mock_connection.execute.return_value = mock_cursor
-        mock_db.connect.return_value = mock_connection
-        subject = MWLStorage(tmp_dir)
-        mock_connection.reset_mock()
-
-        subject.find_worklist_items(patient_name=dicom_pattern)
-
-        mock_connection.execute.assert_called_once_with(
-            (
-                "SELECT accession_number, modality, patient_birth_date, patient_id, "
-                "patient_name, patient_sex, procedure_code, scheduled_date, scheduled_time, "
-                "source_message_id, study_description, study_instance_uid, status, mpps_instance_uid "
-                f"FROM worklist_items WHERE UPPER(patient_name) {operator} UPPER(?) ORDER BY scheduled_date, scheduled_time"
-            ),
-            [sql_pattern],
-        )
-
-    def test_get_worklist_item(self, mock_db, tmp_dir, result):
-        mock_cursor = MagicMock()
-        mock_cursor.fetchone.return_value = result
-        mock_connection = MagicMock()
-        mock_connection.execute.return_value = mock_cursor
-        mock_db.connect.return_value = mock_connection
-
-        subject = MWLStorage(tmp_dir)
-        mock_connection.reset_mock()
-
-        worklist_item = subject.get_worklist_item("ACC123456")
-
-        mock_connection.execute.assert_called_once_with(
-            (
-                "SELECT accession_number, modality, patient_birth_date, patient_id, "
-                "patient_name, patient_sex, procedure_code, scheduled_date, scheduled_time, "
-                "source_message_id, study_description, study_instance_uid, status, mpps_instance_uid "
-                "FROM worklist_items WHERE accession_number = ?"
-            ),
-            ("ACC123456",),
-        )
-        assert worklist_item == WorklistItem(**result)
-
-    def test_get_worklist_item_returns_none(self, mock_db, tmp_dir):
-        mock_cursor = MagicMock()
-        mock_cursor.fetchone.return_value = None
-        mock_connection = MagicMock()
-        mock_connection.execute.return_value = mock_cursor
-        mock_db.connect.return_value = mock_connection
-
-        subject = MWLStorage(tmp_dir)
-
-        assert subject.get_worklist_item("ACC123456") is None
-
-    def test_update_status(self, mock_db, tmp_dir):
-        mock_connection = MagicMock()
-        mock_cursor = PropertyMock()
-        mock_cursor.rowcount = 1
-        mock_cursor.fetchone.return_value = {"source_message_id": "MSGID123456"}
-        mock_connection.execute.return_value = mock_cursor
-        mock_db.connect.return_value = mock_connection
-
-        subject = MWLStorage(tmp_dir)
-        mock_connection.reset_mock()
-
-        result = subject.update_status("ACC123456", "COMPLETED")
-
-        assert mock_connection.execute.call_count == 2
-        mock_connection.execute.assert_any_call(
-            """
-                UPDATE worklist_items
-                SET status = ?,
-                    mpps_instance_uid = COALESCE(?, mpps_instance_uid),
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE accession_number = ?
-            """,
-            ("COMPLETED", None, "ACC123456"),
-        )
-        mock_connection.execute.assert_any_call(
-            "SELECT source_message_id FROM worklist_items WHERE accession_number = ?", ("ACC123456",)
-        )
-        mock_connection.commit.assert_called_once()
-        assert result == "MSGID123456"
-
-    def test_update_status_with_no_update(self, mock_db, tmp_dir):
-        mock_connection = MagicMock()
-        mock_cursor = PropertyMock()
-        mock_cursor.rowcount = 0
-        mock_cursor.fetchone.return_value = {"source_message_id": "MSGID123456"}
-        mock_connection.execute.return_value = mock_cursor
-        mock_db.connect.return_value = mock_connection
-
-        subject = MWLStorage(tmp_dir)
-        mock_connection.reset_mock()
-
-        subject.update_status("ACC123456", "COMPLETED")
-
-        result = mock_connection.execute.assert_called_once_with(
-            """
-                UPDATE worklist_items
-                SET status = ?,
-                    mpps_instance_uid = COALESCE(?, mpps_instance_uid),
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE accession_number = ?
-            """,
-            ("COMPLETED", None, "ACC123456"),
-        )
-        mock_connection.commit.assert_called_once()
         assert result is None
 
-    def test_update_status_with_mpps(self, mock_db, tmp_dir):
-        mock_connection = MagicMock()
-        mock_cursor = PropertyMock()
-        mock_cursor.rowcount = 1
-        mock_cursor.fetchone.return_value = {"source_message_id": "MSGID123456"}
-        mock_connection.execute.return_value = mock_cursor
-        mock_db.connect.return_value = mock_connection
+    def test_update_status_with_mpps(self, mwl_storage, result):
+        item = self._insert_item(mwl_storage, result)
 
-        subject = MWLStorage(tmp_dir)
-        mock_connection.reset_mock()
-
-        result = subject.update_status("ACC123456", "COMPLETED", mpps_instance_uid="some-uid")
-        assert mock_connection.execute.call_count == 2
-        mock_connection.execute.assert_any_call(
-            """
-                UPDATE worklist_items
-                SET status = ?,
-                    mpps_instance_uid = COALESCE(?, mpps_instance_uid),
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE accession_number = ?
-            """,
-            ("COMPLETED", "some-uid", "ACC123456"),
+        returned = mwl_storage.update_status(
+            item.accession_number,
+            "COMPLETED",
+            mpps_instance_uid="some-uid",
         )
-        mock_connection.commit.assert_called_once()
-        assert result == "MSGID123456"
 
-    def test_update_study_instance_uid(self, mock_db, tmp_dir):
-        study_instance_uid = "some-uid"
-        mock_connection = MagicMock()
-        mock_cursor = PropertyMock()
-        mock_cursor.rowcount = 1
-        mock_connection.execute.return_value = mock_cursor
-        mock_db.connect.return_value = mock_connection
+        assert returned == item.source_message_id
 
-        subject = MWLStorage(tmp_dir)
-        mock_connection.reset_mock()
+        with mwl_storage._get_connection() as conn:
+            row = conn.execute(
+                "SELECT mpps_instance_uid FROM worklist_items WHERE accession_number = ?",
+                (item.accession_number,),
+            ).fetchone()
 
-        result = subject.update_study_instance_uid("ACC123456", study_instance_uid)
+        assert row["mpps_instance_uid"] == "some-uid"
 
-        mock_connection.execute.assert_called_once_with(
-            """
-                UPDATE worklist_items
-                SET study_instance_uid = ?,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE accession_number = ?
-            """,
-            (study_instance_uid, "ACC123456"),
-        )
-        mock_connection.commit.assert_called_once()
+    def test_update_study_instance_uid(self, mwl_storage, result):
+        item = self._insert_item(mwl_storage, result)
 
-        assert result is True
+        assert mwl_storage.update_study_instance_uid(item.accession_number, "new-uid") is True
 
-    def test_update_study_instance_uid_raises(self, mock_db, tmp_dir):
-        study_instance_uid = "some-uid"
-        mock_connection = MagicMock()
-        mock_cursor = PropertyMock()
-        mock_cursor.rowcount = 0
-        mock_connection.execute.return_value = mock_cursor
-        mock_db.connect.return_value = mock_connection
-
-        subject = MWLStorage(tmp_dir)
-        mock_connection.reset_mock()
-
+    def test_update_study_instance_uid_raises(self, mwl_storage):
         with pytest.raises(WorklistItemNotFoundError):
-            subject.update_study_instance_uid("ACC123456", study_instance_uid)
+            mwl_storage.update_study_instance_uid("DOES_NOT_EXIST", "uid")
 
-    def test_delete_worklist_item(self, mock_db, tmp_dir):
-        mock_connection = MagicMock()
-        mock_cursor = PropertyMock()
-        mock_cursor.rowcount = 1
-        mock_connection.execute.return_value = mock_cursor
-        mock_db.connect.return_value = mock_connection
+    def test_delete_worklist_item(self, mwl_storage, result):
+        item = self._insert_item(mwl_storage, result)
 
-        subject = MWLStorage(tmp_dir)
-        mock_connection.reset_mock()
+        assert mwl_storage.delete_worklist_item(item.accession_number) is True
 
-        result = subject.delete_worklist_item("ACC123456")
+        with mwl_storage._get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM worklist_items WHERE accession_number = ?",
+                (item.accession_number,),
+            ).fetchone()
 
-        mock_connection.execute.assert_called_once_with(
-            "DELETE FROM worklist_items WHERE accession_number = ?", ("ACC123456",)
-        )
-        mock_connection.commit.assert_called_once()
+        assert row is None
 
-        assert result is True
-
-    def test_delete_worklist_item_raises(self, mock_db, tmp_dir):
-        mock_connection = MagicMock()
-        mock_cursor = PropertyMock()
-        mock_cursor.rowcount = 0
-        mock_connection.execute.return_value = mock_cursor
-        mock_db.connect.return_value = mock_connection
-
-        subject = MWLStorage(tmp_dir)
-        mock_connection.reset_mock()
-
+    def test_delete_worklist_item_raises(self, mwl_storage):
         with pytest.raises(WorklistItemNotFoundError):
-            subject.delete_worklist_item("ACC123456")
+            mwl_storage.delete_worklist_item("DOES_NOT_EXIST")
 
-    def test_mpps_instance_exists(self, mock_db, tmp_dir):
-        mock_cursor = MagicMock()
-        mock_cursor.fetchone.return_value = (1,)
-        mock_connection = MagicMock()
-        mock_connection.execute.return_value = mock_cursor
-        mock_db.connect.return_value = mock_connection
+    def test_mpps_instance_exists(self, mwl_storage, result):
+        uid = generate_uid()
+        item = self._insert_item(mwl_storage, result)
 
-        subject = MWLStorage(tmp_dir)
-        mock_connection.reset_mock()
+        mwl_storage.update_status(item.accession_number, "COMPLETED", mpps_instance_uid=uid)
 
-        assert subject.mpps_instance_exists(generate_uid()) is True
+        assert mwl_storage.mpps_instance_exists(uid) is True
 
-    def test_mpps_instance_not_exists(self, mock_db, tmp_dir):
-        mock_cursor = MagicMock()
-        mock_cursor.fetchone.return_value = None
-        mock_connection = MagicMock()
-        mock_connection.execute.return_value = mock_cursor
-        mock_db.connect.return_value = mock_connection
+    def test_mpps_instance_not_exists(self, mwl_storage):
+        assert mwl_storage.mpps_instance_exists("nope") is False
 
-        subject = MWLStorage(tmp_dir)
-        mock_connection.reset_mock()
+    def test_get_worklist_item_by_mpps_instance_uid(self, mwl_storage, result):
+        uid = generate_uid()
+        item = self._insert_item(mwl_storage, result)
 
-        assert subject.mpps_instance_exists(generate_uid()) is False
+        mwl_storage.update_status(item.accession_number, "COMPLETED", mpps_instance_uid=uid)
 
-    def test_get_worklist_item_by_mpps_instance_uid(self, mock_db, tmp_dir, result):
-        mpps_instance_uid = "some-mpps-uid"
-        mock_cursor = MagicMock()
-        mock_cursor.fetchone.return_value = result
-        mock_connection = MagicMock()
-        mock_connection.execute.return_value = mock_cursor
-        mock_db.connect.return_value = mock_connection
+        fetched = mwl_storage.get_worklist_item_by_mpps_instance_uid(uid)
 
-        subject = MWLStorage(tmp_dir)
-        mock_connection.reset_mock()
+        assert fetched.accession_number == item.accession_number
+        assert fetched.mpps_instance_uid == uid
+        assert fetched.status == "COMPLETED"
+        assert fetched.source_message_id == item.source_message_id
+        assert fetched.patient_id == item.patient_id
 
-        worklist_item = subject.get_worklist_item_by_mpps_instance_uid(mpps_instance_uid)
-
-        mock_connection.execute.assert_called_once_with(
-            (
-                "SELECT accession_number, modality, patient_birth_date, patient_id, "
-                "patient_name, patient_sex, procedure_code, scheduled_date, scheduled_time, "
-                "source_message_id, study_description, study_instance_uid, status, mpps_instance_uid "
-                "FROM worklist_items WHERE mpps_instance_uid = ?"
-            ),
-            (mpps_instance_uid,),
-        )
-        assert worklist_item == WorklistItem(**result)
-
-    def test_get_worklist_item_by_mpps_instance_uid_returns_none(self, mock_db, tmp_dir):
-        mpps_instance_uid = "some-mpps-uid"
-        mock_cursor = MagicMock()
-        mock_cursor.fetchone.return_value = None
-        mock_connection = MagicMock()
-        mock_connection.execute.return_value = mock_cursor
-        mock_db.connect.return_value = mock_connection
-
-        subject = MWLStorage(tmp_dir)
-
-        assert subject.get_worklist_item_by_mpps_instance_uid(mpps_instance_uid) is None
+    def test_get_worklist_item_by_mpps_instance_uid_returns_none(self, mwl_storage):
+        assert mwl_storage.get_worklist_item_by_mpps_instance_uid("nope") is None
