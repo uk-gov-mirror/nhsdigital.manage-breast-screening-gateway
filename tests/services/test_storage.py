@@ -5,7 +5,8 @@ from unittest.mock import MagicMock, PropertyMock, patch
 import pytest
 from pydicom.uid import generate_uid
 
-from services.storage import MWLStorage, PACSStorage, WorklistItem, WorklistItemNotFoundError
+from models import WorklistItem
+from services.storage import MWLStorage, PACSStorage, WorklistItemNotFoundError
 
 
 @patch("services.storage.sqlite3")
