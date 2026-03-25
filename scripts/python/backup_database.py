@@ -1,8 +1,9 @@
-from datetime import datetime
-import dotenv
-import sqlite3
 import os
+import sqlite3
 import sys
+from datetime import datetime
+
+import dotenv
 
 dotenv.load_dotenv()
 
