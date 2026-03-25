@@ -7,8 +7,11 @@ Provides:
 
 import logging
 
-from pynetdicom import AE, StoragePresentationContexts, evt
+import pydicom.uid as dicom_uid
+from pynetdicom import AE, evt
 from pynetdicom.sop_class import (
+    DigitalMammographyXRayImageStorageForPresentation,  # type: ignore[attr-defined]
+    DigitalMammographyXRayImageStorageForProcessing,  # type: ignore[attr-defined]
     ModalityPerformedProcedureStep,  # type: ignore[attr-defined]
     ModalityWorklistInformationFind,  # type: ignore[attr-defined]
 )
@@ -56,8 +59,17 @@ class PACSServer:
         """Start the PACS server and listen for incoming connections."""
         logger.info(f"Starting PACS server: {self.ae_title} on port {self.port}")
 
+        transfer_syntaxes = [
+            dicom_uid.JPEGLosslessSV1,  # Hologic preferred
+            dicom_uid.ExplicitVRLittleEndian,
+            dicom_uid.ImplicitVRLittleEndian,
+            dicom_uid.ExplicitVRBigEndian,
+            dicom_uid.JPEGLSLossless,
+            dicom_uid.JPEG2000Lossless,
+        ]
         self.ae = AE(ae_title=self.ae_title)
-        self.ae.supported_contexts = StoragePresentationContexts
+        self.ae.add_supported_context(DigitalMammographyXRayImageStorageForPresentation, transfer_syntaxes)
+        self.ae.add_supported_context(DigitalMammographyXRayImageStorageForProcessing, transfer_syntaxes)
 
         handlers = [
             (evt.EVT_C_ECHO, CEcho().call),
