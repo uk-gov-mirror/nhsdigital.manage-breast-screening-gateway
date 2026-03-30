@@ -35,6 +35,20 @@ class TestRelayListener:
         assert subject.relay_uri.shared_access_key == "test-key-value"
 
     @pytest.mark.asyncio
+    async def test_relay_listener_listen_echo(self, storage_instance, fake_relay):
+        subject = RelayListener(storage_instance)
+
+        relay_message = json.dumps({"accept": {"address": "wss://accept-url"}})
+        client_payload = json.dumps({"action_type": "echo", "message": "Hello, Relay!"})
+
+        with fake_relay(relay_message, client_payload) as client_ws:
+            await subject.listen()
+
+        client_ws.send.assert_called_once_with(
+            json.dumps({"status": "echo", "payload": {"action_type": "echo", "message": "Hello, Relay!"}})
+        )
+
+    @pytest.mark.asyncio
     async def test_relay_listener_listen(self, storage_instance, listener_payload, fake_relay):
         storage_instance.store_worklist_action.return_value = {"action_id": "action-12345", "status": "created"}
         subject = RelayListener(storage_instance)
