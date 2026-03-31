@@ -28,12 +28,8 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 DB_PATH = os.getenv("MWL_DB_PATH", "/var/lib/pacs/worklist.db")
-SAS_TOKEN_EXPIRY_SECONDS = 3600
-
-ACTIONS = {
-    "worklist.create_item": CreateWorklistItem,
-}
 EXPIRED_TOKEN = "ExpiredToken"
+SAS_TOKEN_EXPIRY_SECONDS = 3600
 
 
 class RelayListener:
@@ -86,11 +82,12 @@ class RelayListener:
         """Process incoming action payload."""
         action_name = payload.get("action_type", "no-op")
 
-        action_class = ACTIONS.get(action_name)
-        if not action_class:
-            raise ValueError(f"Unknown action: {action_name}")
-
-        return action_class(self.storage).call(payload)
+        if action_name == "echo":
+            return {"status": "echo", "payload": payload}
+        elif action_name == "worklist.create_item":
+            return CreateWorklistItem(self.storage).call(payload)
+        else:
+            raise ValueError(f"Unsupported action: {action_name}")
 
     def _connect(self):
         """Connect to Azure Relay."""
