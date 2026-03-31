@@ -124,6 +124,30 @@ class TestCStore:
         mock_notifier.notify.assert_called_once_with("action-uuid-123", "DICOM validation failed: Missing required tag")
         mock_mwl.get_source_message_id.assert_called_once_with("ABC123")
 
+    def test_worklist_marked_in_progress_on_success(self, mock_storage, mock_event):
+        mock_mwl = Mock(spec=MWLStorage)
+        subject = CStore(mock_storage, mwl_storage=mock_mwl)
+
+        assert subject.call(mock_event) == SUCCESS
+
+        mock_mwl.update_status.assert_called_once_with("ABC123", "IN PROGRESS")
+
+    def test_worklist_not_updated_on_store_failure(self, mock_storage, mock_event):
+        mock_storage.store_instance.side_effect = Exception("store failed")
+        mock_mwl = Mock(spec=MWLStorage)
+        subject = CStore(mock_storage, mwl_storage=mock_mwl)
+
+        assert subject.call(mock_event) == FAILURE
+
+        mock_mwl.update_status.assert_not_called()
+
+    def test_worklist_update_error_does_not_fail_store(self, mock_storage, mock_event):
+        mock_mwl = Mock(spec=MWLStorage)
+        mock_mwl.update_status.side_effect = Exception("db error")
+        subject = CStore(mock_storage, mwl_storage=mock_mwl)
+
+        assert subject.call(mock_event) == SUCCESS
+
     def test_validation_failure_accession_not_in_mwl(self, mock_storage, mock_event):
         """When accession is not in MWL, validation failure returns FAILURE without calling notify."""
         mock_validator = Mock(spec=DicomValidator)

@@ -8,6 +8,7 @@ from services.dicom import FAILURE, SUCCESS
 from services.dicom.image_compressor import ImageCompressor
 from services.dicom.validation_failure_notifier import ValidationFailureNotifier
 from services.dicom.validator import DicomValidationError, DicomValidator
+from services.mwl import MWLStatus
 from services.storage import InstanceExistsError, MWLStorage, PACSStorage
 
 logger = logging.getLogger(__name__)
@@ -79,6 +80,7 @@ class CStore:
                 },
                 event.assoc.requestor.ae_title,
             )
+            self._mark_in_progress(accession_number)
             return SUCCESS
 
         except InstanceExistsError:
@@ -96,6 +98,14 @@ class CStore:
             dcmwrite(buffer, ds, enforce_file_format=True)
             buffer.seek(0)
             return buffer.read()
+
+    def _mark_in_progress(self, accession_number: str) -> None:
+        if not self.mwl_storage or not accession_number:
+            return
+        try:
+            self.mwl_storage.update_status(accession_number, MWLStatus.IN_PROGRESS.value)
+        except Exception as e:
+            logger.error(f"Failed to mark worklist item in progress: {e}", exc_info=True)
 
     def _notify_failure(self, accession_number: str, error: str) -> None:
         if not self.mwl_storage or not self.notifier:
