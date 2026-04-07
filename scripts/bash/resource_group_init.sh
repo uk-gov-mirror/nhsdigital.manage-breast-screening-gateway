@@ -48,4 +48,5 @@ echo "Deploy to core subscription $ARM_SUBSCRIPTION_ID..."
 az deployment sub create --location "$REGION" --template-file infrastructure/terraform/resource_group_init/core.bicep \
   --subscription "$ARM_SUBSCRIPTION_ID" \
   --parameters miName="$miName" miPrincipalId="$miPrincipalID" \
-    userGroupPrincipalID="$userGroupPrincipalID" userGroupName="$userGroupName" --confirm-with-what-if
+    userGroupPrincipalID="$userGroupPrincipalID" userGroupName="$userGroupName" \
+    appShortName="$APP_SHORT_NAME" envConfig="$ENV_CONFIG" region="$REGION" --confirm-with-what-if

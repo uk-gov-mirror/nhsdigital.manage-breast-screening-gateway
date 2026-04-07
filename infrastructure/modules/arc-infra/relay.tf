@@ -15,7 +15,7 @@ locals {
 data "azurerm_resources" "arc_machines" {
   count = var.enable_arc_servers ? 1 : 0
 
-  resource_group_name = azurerm_resource_group.arc_enabled_servers[0].name
+  resource_group_name = data.azurerm_resource_group.arc_enabled_servers[0].name
   type                = "Microsoft.HybridCompute/machines"
 }
 

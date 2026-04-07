@@ -43,7 +43,7 @@ stages:
                 - task: AzureCLI@2
                   displayName: Run Terraform
                   inputs:
-                    azureSubscription: manbgw-${{ parameters.environment }}
+                    azureSubscription: mbsgw-${{ parameters.environment }}
                     scriptType: bash
                     scriptLocation: inlineScript
                     addSpnToEnvironment: true
