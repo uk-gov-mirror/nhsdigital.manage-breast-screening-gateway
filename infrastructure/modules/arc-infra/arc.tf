@@ -1,9 +1,9 @@
-# Resource group for Arc-enabled servers (where machines register on onboarding)
-resource "azurerm_resource_group" "arc_enabled_servers" {
+# Resource group for Arc-enabled servers — created by resource-group-init (Bicep),
+# not managed by Terraform, so it exists before this module runs.
+data "azurerm_resource_group" "arc_enabled_servers" {
   count = var.enable_arc_servers ? 1 : 0
 
-  name     = "${var.resource_group_name}-arc-enabled-servers"
-  location = var.region
+  name = "${var.resource_group_name}-arc-enabled-servers"
 }
 
 # Look up the Arc onboarding service principal by its standard name
@@ -18,7 +18,7 @@ module "arc_onboarding_role" {
 
   source = "../dtos-devops-templates/infrastructure/modules/rbac-assignment"
 
-  scope                = azurerm_resource_group.arc_enabled_servers[0].id
+  scope                = data.azurerm_resource_group.arc_enabled_servers[0].id
   role_definition_name = "Azure Connected Machine Onboarding"
   principal_id         = data.azuread_service_principal.arc_onboarding[0].object_id
 }

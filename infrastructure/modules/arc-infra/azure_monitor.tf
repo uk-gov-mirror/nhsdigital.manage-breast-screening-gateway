@@ -5,7 +5,7 @@ module "log_analytics_workspace" {
 
   name                = "law-${var.app_short_name}-${var.env_config}-arc-uks"
   location            = var.region
-  resource_group_name = azurerm_resource_group.arc_enabled_servers[0].name
+  resource_group_name = data.azurerm_resource_group.arc_enabled_servers[0].name
   law_sku             = "PerGB2018"
   retention_days      = 30
 
@@ -19,7 +19,7 @@ resource "azurerm_monitor_data_collection_rule" "arc" {
 
   name                = "dcr-${var.app_short_name}-${var.env_config}-arc-uks"
   location            = var.region
-  resource_group_name = azurerm_resource_group.arc_enabled_servers[0].name
+  resource_group_name = data.azurerm_resource_group.arc_enabled_servers[0].name
 
   destinations {
     log_analytics {
@@ -65,7 +65,7 @@ module "arc_monitor_policy_identity" {
   source = "../dtos-devops-templates/infrastructure/modules/managed-identity"
 
   uai_name            = "mi-${var.app_short_name}-${var.env_config}-arc-monitor-uks"
-  resource_group_name = azurerm_resource_group.arc_enabled_servers[0].name
+  resource_group_name = data.azurerm_resource_group.arc_enabled_servers[0].name
   location            = var.region
 }
 
@@ -74,18 +74,28 @@ module "arc_monitor_policy_connected_machine_role" {
   count  = var.enable_arc_servers ? 1 : 0
   source = "../dtos-devops-templates/infrastructure/modules/rbac-assignment"
 
-  scope                = azurerm_resource_group.arc_enabled_servers[0].id
+  scope                = data.azurerm_resource_group.arc_enabled_servers[0].id
   role_definition_name = "Azure Connected Machine Resource Administrator"
   principal_id         = module.arc_monitor_policy_identity[0].principal_id
 }
 
-# Grants the identity permission to create DCR associations and configure workspaces
+# Grants the identity permission to configure Log Analytics workspaces
 module "arc_monitor_policy_log_analytics_role" {
   count  = var.enable_arc_servers ? 1 : 0
   source = "../dtos-devops-templates/infrastructure/modules/rbac-assignment"
 
-  scope                = azurerm_resource_group.arc_enabled_servers[0].id
+  scope                = data.azurerm_resource_group.arc_enabled_servers[0].id
   role_definition_name = "Log Analytics Contributor"
+  principal_id         = module.arc_monitor_policy_identity[0].principal_id
+}
+
+# Grants the identity permission to write DCR associations on Arc machine resources
+module "arc_monitor_policy_monitoring_contributor_role" {
+  count  = var.enable_arc_servers ? 1 : 0
+  source = "../dtos-devops-templates/infrastructure/modules/rbac-assignment"
+
+  scope                = data.azurerm_resource_group.arc_enabled_servers[0].id
+  role_definition_name = "Monitoring Contributor"
   principal_id         = module.arc_monitor_policy_identity[0].principal_id
 }
 
@@ -98,8 +108,8 @@ resource "azurerm_resource_group_policy_assignment" "ama_install" {
   count = var.enable_arc_servers ? 1 : 0
 
   name                 = "ama-install-arc-${var.env_config}"
-  resource_group_id    = azurerm_resource_group.arc_enabled_servers[0].id
-  policy_definition_id = "/providers/Microsoft.Authorization/policyDefinitions/4efbd9d8-6bc6-45f6-9be2-7fe9dd5d89ff"
+  resource_group_id    = data.azurerm_resource_group.arc_enabled_servers[0].id
+  policy_definition_id = "/providers/Microsoft.Authorization/policyDefinitions/94f686d6-9a24-4e19-91f1-de937dc171a4"
   location             = var.region
 
   identity {
@@ -112,8 +122,8 @@ resource "azurerm_resource_group_policy_assignment" "dcr_association" {
   count = var.enable_arc_servers ? 1 : 0
 
   name                 = "dcr-assoc-arc-${var.env_config}"
-  resource_group_id    = azurerm_resource_group.arc_enabled_servers[0].id
-  policy_definition_id = "/providers/Microsoft.Authorization/policyDefinitions/eab1f514-22e3-42e3-9a1f-e1dc9199355c"
+  resource_group_id    = data.azurerm_resource_group.arc_enabled_servers[0].id
+  policy_definition_id = "/providers/Microsoft.Authorization/policyDefinitions/c24c537f-2516-4c2f-aac5-2cd26baa3d26"
   location             = var.region
 
   identity {
@@ -125,4 +135,25 @@ resource "azurerm_resource_group_policy_assignment" "dcr_association" {
     dcrResourceId = { value = azurerm_monitor_data_collection_rule.arc[0].id }
     resourceType  = { value = "Microsoft.Insights/dataCollectionRules" }
   })
+}
+
+# Remediation tasks — re-evaluate compliance and deploy AMA/DCR association on
+# any non-compliant Arc machines each time Terraform applies. Combined with the
+# DeployIfNotExists effect, this makes the monitoring setup self-healing.
+resource "azurerm_resource_group_policy_remediation" "ama_install" {
+  count = var.enable_arc_servers ? 1 : 0
+
+  name                   = "remediation-ama-install-${var.env_config}"
+  resource_group_id      = data.azurerm_resource_group.arc_enabled_servers[0].id
+  policy_assignment_id   = azurerm_resource_group_policy_assignment.ama_install[0].id
+  resource_discovery_mode = "ReEvaluateCompliance"
+}
+
+resource "azurerm_resource_group_policy_remediation" "dcr_association" {
+  count = var.enable_arc_servers ? 1 : 0
+
+  name                   = "remediation-dcr-assoc-${var.env_config}"
+  resource_group_id      = data.azurerm_resource_group.arc_enabled_servers[0].id
+  policy_assignment_id   = azurerm_resource_group_policy_assignment.dcr_association[0].id
+  resource_discovery_mode = "ReEvaluateCompliance"
 }

@@ -8,6 +8,19 @@ param miName string
 param userGroupPrincipalID string
 @minLength(1)
 param userGroupName string
+@minLength(1)
+param appShortName string
+@minLength(1)
+param envConfig string
+@minLength(1)
+param region string
+
+// Arc-enabled servers RG must exist before Terraform runs so the arc-infra module
+// can reference it as a data source rather than managing its lifecycle.
+resource arcEnabledServersRG 'Microsoft.Resources/resourceGroups@2024-11-01' = {
+  name: 'rg-${appShortName}-${envConfig}-uks-arc-enabled-servers'
+  location: region
+}
 
 // See: https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles
 var roleID = {
@@ -20,7 +33,7 @@ var roleID = {
   AzureConnectedMachineOnboarding: 'b64e21ea-ac4e-4cdf-9dc9-5b892992bee7'
   AzureConnectedMachineResourceAdministrator: 'cd570a14-e51a-42ad-bac8-bafd67325302'
   logAnalyticsContributor: '92aaf0da-9dab-42b6-94a3-d43ce8d16293'
-  resourcePolicyContributor: '36243c78-bf99-498c-9df9-ad4ef54afa4c'
+  resourcePolicyContributor: '36243c78-bf99-498c-9df9-86d9f8d28608'
   virtualMachineAdministratorLogin: '1c0163c0-47e6-4577-8991-ea5c82e286e4'
 }
 

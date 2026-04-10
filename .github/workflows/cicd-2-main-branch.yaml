@@ -104,7 +104,7 @@ jobs:
       id-token: write
     uses: ./.github/workflows/stage-4-deploy.yaml
     with:
-      environments: '["review"]'
+      environments: '["review", "dev", "preprod"]'
       commit_sha: ${{ github.sha }}
     secrets: inherit
 
@@ -120,7 +120,7 @@ jobs:
       id-token: write
     uses: ./.github/workflows/stage-4-deploy-app.yaml
     with:
-      environments: '["dev", "preprod", "prod"]'
+      environments: '["dev", "preprod"]'
       release_tag: ${{ needs.release-stage.outputs.new_release_version }}
       commit_sha: ${{ github.sha }}
     secrets: inherit

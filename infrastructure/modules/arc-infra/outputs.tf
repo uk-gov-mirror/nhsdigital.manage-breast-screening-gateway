@@ -1,11 +1,11 @@
 output "arc_enabled_servers_resource_group_name" {
   description = "Name of the Arc-enabled servers resource group"
-  value       = var.enable_arc_servers ? azurerm_resource_group.arc_enabled_servers[0].name : null
+  value       = var.enable_arc_servers ? data.azurerm_resource_group.arc_enabled_servers[0].name : null
 }
 
 output "arc_enabled_servers_resource_group_id" {
   description = "ID of the Arc-enabled servers resource group"
-  value       = var.enable_arc_servers ? azurerm_resource_group.arc_enabled_servers[0].id : null
+  value       = var.enable_arc_servers ? data.azurerm_resource_group.arc_enabled_servers[0].id : null
 }
 
 output "arc_onboarding_spn_client_id" {

@@ -33,9 +33,9 @@ variable "enable_gateway_test_vm" {
 }
 
 variable "vnet_address_space" {
-  description = "Address space for the gateway test VM VNet (e.g., 10.130.0.0/16). Required when enable_gateway_test_vm is true."
+  description = "Address space for the gateway test VM VNet. This VNet is isolated and never peered — the default works for all environments."
   type        = string
-  default     = null
+  default     = "10.131.0.0/16"
 }
 
 variable "bastion_sku" {
