@@ -35,6 +35,7 @@ var roleID = {
   logAnalyticsContributor: '92aaf0da-9dab-42b6-94a3-d43ce8d16293'
   resourcePolicyContributor: '36243c78-bf99-498c-9df9-86d9f8d28608'
   virtualMachineAdministratorLogin: '1c0163c0-47e6-4577-8991-ea5c82e286e4'
+  windowsAdminCenterAdministratorLogin: 'a6333a3e-0164-44c3-b281-7a577aff287f'
 }
 
 // Define role assignments for managed identity
@@ -57,10 +58,10 @@ var miRoleAssignments = [
   {
     roleName: 'rbacAdmin'
     roleId: roleID.rbacAdmin
-    description: 'RBAC Administrator. Restricted to only assign/remove: Storage Blob Data Contributor, Storage Queue Data Contributor, Azure Connected Machine Onboarding, Azure Connected Machine Resource Administrator, Log Analytics Contributor, and Virtual Machine Administrator Login.'
+    description: 'RBAC Administrator. Restricted to only assign/remove: Storage Blob Data Contributor, Storage Queue Data Contributor, Azure Connected Machine Onboarding, Azure Connected Machine Resource Administrator, Log Analytics Contributor, Virtual Machine Administrator Login, and Windows Admin Center Administrator Login.'
     // Delegated RBAC: This condition restricts the RBAC Administrator to only manage specific roles.
     // This is a security best practice that prevents the identity from granting itself or others sensitive roles like 'Owner' or 'User Access Administrator'.
-    condition: '((!(ActionMatches{\'Microsoft.Authorization/roleAssignments/write\'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {${roleID.storageBlobDataContributor}, ${roleID.storageQueueDataContributor}, ${roleID.AzureConnectedMachineOnboarding}, ${roleID.AzureConnectedMachineResourceAdministrator}, ${roleID.logAnalyticsContributor}, ${roleID.virtualMachineAdministratorLogin}})) AND ((!(ActionMatches{\'Microsoft.Authorization/roleAssignments/delete\'})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {${roleID.storageBlobDataContributor}, ${roleID.storageQueueDataContributor}, ${roleID.AzureConnectedMachineOnboarding}, ${roleID.AzureConnectedMachineResourceAdministrator}, ${roleID.logAnalyticsContributor}, ${roleID.virtualMachineAdministratorLogin}}))'
+    condition: '((!(ActionMatches{\'Microsoft.Authorization/roleAssignments/write\'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {${roleID.storageBlobDataContributor}, ${roleID.storageQueueDataContributor}, ${roleID.AzureConnectedMachineOnboarding}, ${roleID.AzureConnectedMachineResourceAdministrator}, ${roleID.logAnalyticsContributor}, ${roleID.virtualMachineAdministratorLogin}, ${roleID.windowsAdminCenterAdministratorLogin}})) AND ((!(ActionMatches{\'Microsoft.Authorization/roleAssignments/delete\'})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {${roleID.storageBlobDataContributor}, ${roleID.storageQueueDataContributor}, ${roleID.AzureConnectedMachineOnboarding}, ${roleID.AzureConnectedMachineResourceAdministrator}, ${roleID.logAnalyticsContributor}, ${roleID.virtualMachineAdministratorLogin}, ${roleID.windowsAdminCenterAdministratorLogin}}))'
     conditionVersion: '2.0'
   }
 ]
@@ -80,10 +81,10 @@ var groupRoleAssignments = [
   {
     roleName: 'rbacAdmin'
     roleId: roleID.rbacAdmin
-    description: 'RBAC Administrator. Restricted to only assign/remove: Storage Blob Data Contributor, Storage Queue Data Contributor, Azure Connected Machine Onboarding, Azure Connected Machine Resource Administrator, Log Analytics Contributor, and Virtual Machine Administrator Login.'
+    description: 'RBAC Administrator. Restricted to only assign/remove: Storage Blob Data Contributor, Storage Queue Data Contributor, Azure Connected Machine Onboarding, Azure Connected Machine Resource Administrator, Log Analytics Contributor, Virtual Machine Administrator Login, and Windows Admin Center Administrator Login.'
     // Delegated RBAC: This condition restricts the RBAC Administrator to only manage specific roles.
     // This is a security best practice that prevents the identity from granting itself or others sensitive roles like 'Owner' or 'User Access Administrator'.
-    condition: '((!(ActionMatches{\'Microsoft.Authorization/roleAssignments/write\'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {${roleID.storageBlobDataContributor}, ${roleID.storageQueueDataContributor}, ${roleID.AzureConnectedMachineOnboarding}, ${roleID.AzureConnectedMachineResourceAdministrator}, ${roleID.logAnalyticsContributor}, ${roleID.virtualMachineAdministratorLogin}})) AND ((!(ActionMatches{\'Microsoft.Authorization/roleAssignments/delete\'})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {${roleID.storageBlobDataContributor}, ${roleID.storageQueueDataContributor}, ${roleID.AzureConnectedMachineOnboarding}, ${roleID.AzureConnectedMachineResourceAdministrator}, ${roleID.logAnalyticsContributor}, ${roleID.virtualMachineAdministratorLogin}}))'
+    condition: '((!(ActionMatches{\'Microsoft.Authorization/roleAssignments/write\'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {${roleID.storageBlobDataContributor}, ${roleID.storageQueueDataContributor}, ${roleID.AzureConnectedMachineOnboarding}, ${roleID.AzureConnectedMachineResourceAdministrator}, ${roleID.logAnalyticsContributor}, ${roleID.virtualMachineAdministratorLogin}, ${roleID.windowsAdminCenterAdministratorLogin}})) AND ((!(ActionMatches{\'Microsoft.Authorization/roleAssignments/delete\'})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {${roleID.storageBlobDataContributor}, ${roleID.storageQueueDataContributor}, ${roleID.AzureConnectedMachineOnboarding}, ${roleID.AzureConnectedMachineResourceAdministrator}, ${roleID.logAnalyticsContributor}, ${roleID.virtualMachineAdministratorLogin}, ${roleID.windowsAdminCenterAdministratorLogin}}))'
     conditionVersion: '2.0'
   }
 ]

@@ -137,23 +137,83 @@ resource "azurerm_resource_group_policy_assignment" "dcr_association" {
   })
 }
 
+# ---------------------------------------------------------------------------
+# Custom Policy Definition + Assignment for Windows Admin Center
+# Replicates the built-in "Configure Windows Arc-enabled machines to enable
+# Windows Admin Center Extension" (0e4b8929), which is not available in this tenant.
+# Policy rule is defined in policies/deploy-wac-extension-arc-windows.json.
+# ---------------------------------------------------------------------------
+resource "azurerm_policy_definition" "wac" {
+  count = var.enable_arc_servers ? 1 : 0
+
+  name         = "deploy-wac-extension-arc-windows-${var.env_config}"
+  policy_type  = "Custom"
+  mode         = "Indexed"
+  display_name = "Configure Windows Arc-enabled machines to enable Windows Admin Center Extension"
+  description  = "Deploys the AdminCenter extension to Windows Arc-enabled machines to enable browser-based management via the Azure portal."
+
+  parameters = jsonencode({
+    effect = {
+      type          = "String"
+      metadata      = { displayName = "Effect", description = "Enable or disable the execution of the policy" }
+      allowedValues = ["DeployIfNotExists", "Disabled"]
+      defaultValue  = "DeployIfNotExists"
+    }
+    port = {
+      type         = "Integer"
+      metadata     = { displayName = "Port", description = "The port number to use for Windows Admin Center" }
+      defaultValue = 6516
+    }
+    proxyURL = {
+      type         = "String"
+      metadata     = { displayName = "Proxy URL", description = "Optional proxy URL for Windows Admin Center" }
+      defaultValue = ""
+    }
+  })
+
+  policy_rule = file("${path.module}/policies/deploy-wac-extension-arc-windows.json")
+}
+
+resource "azurerm_resource_group_policy_assignment" "wac" {
+  count = var.enable_arc_servers ? 1 : 0
+
+  name                 = "wac-arc-${var.env_config}"
+  resource_group_id    = data.azurerm_resource_group.arc_enabled_servers[0].id
+  policy_definition_id = azurerm_policy_definition.wac[0].id
+  location             = var.region
+
+  identity {
+    type         = "UserAssigned"
+    identity_ids = [module.arc_monitor_policy_identity[0].id]
+  }
+}
+
 # Remediation tasks — re-evaluate compliance and deploy AMA/DCR association on
 # any non-compliant Arc machines each time Terraform applies. Combined with the
 # DeployIfNotExists effect, this makes the monitoring setup self-healing.
 resource "azurerm_resource_group_policy_remediation" "ama_install" {
   count = var.enable_arc_servers ? 1 : 0
 
-  name                   = "remediation-ama-install-${var.env_config}"
-  resource_group_id      = data.azurerm_resource_group.arc_enabled_servers[0].id
-  policy_assignment_id   = azurerm_resource_group_policy_assignment.ama_install[0].id
+  name                    = "remediation-ama-install-${var.env_config}"
+  resource_group_id       = data.azurerm_resource_group.arc_enabled_servers[0].id
+  policy_assignment_id    = azurerm_resource_group_policy_assignment.ama_install[0].id
   resource_discovery_mode = "ReEvaluateCompliance"
 }
 
 resource "azurerm_resource_group_policy_remediation" "dcr_association" {
   count = var.enable_arc_servers ? 1 : 0
 
-  name                   = "remediation-dcr-assoc-${var.env_config}"
-  resource_group_id      = data.azurerm_resource_group.arc_enabled_servers[0].id
-  policy_assignment_id   = azurerm_resource_group_policy_assignment.dcr_association[0].id
+  name                    = "remediation-dcr-assoc-${var.env_config}"
+  resource_group_id       = data.azurerm_resource_group.arc_enabled_servers[0].id
+  policy_assignment_id    = azurerm_resource_group_policy_assignment.dcr_association[0].id
+  resource_discovery_mode = "ReEvaluateCompliance"
+}
+
+resource "azurerm_resource_group_policy_remediation" "wac" {
+  count = var.enable_arc_servers ? 1 : 0
+
+  name                    = "remediation-wac-${var.env_config}"
+  resource_group_id       = data.azurerm_resource_group.arc_enabled_servers[0].id
+  policy_assignment_id    = azurerm_resource_group_policy_assignment.wac[0].id
   resource_discovery_mode = "ReEvaluateCompliance"
 }
