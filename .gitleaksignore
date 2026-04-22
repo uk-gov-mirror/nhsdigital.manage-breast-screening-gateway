@@ -1,4 +1,7 @@
-# Gitleaks allowlist for false positives in git history
+# Gitleaks allowlist for false positives in git history and working tree
+#
+# ARM template contentVersion in WAC policy JSON (matches IPv4 rule)
+infrastructure/modules/arc-infra/policies/deploy-wac-extension-arc-windows.json:ipv4:56
 #
 # These are DICOM UIDs that match the IPv4 pattern in old commits.
 # Current files use inline `# gitleaks:allow` comments instead.
