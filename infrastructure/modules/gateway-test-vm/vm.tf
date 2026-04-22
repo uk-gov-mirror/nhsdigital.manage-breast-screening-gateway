@@ -125,11 +125,8 @@ resource "azurerm_virtual_machine_run_command" "arc_setup" {
 
   # Site identity tags — stamped onto the Arc resource for Terraform HC discovery
   # and ADO pipeline ring targeting. ring0 = test VM only.
-  parameter {
-    name  = "SiteCode"
-    value = "${var.app_short_name}-${var.env_config}"
-  }
-
+  # SiteName/ODSCode/Instance are not passed; the script falls back to the machine
+  # hostname (computer_name = mbsgw-<env>) as the Arc resource name.
   parameter {
     name  = "SiteType"
     value = "static"

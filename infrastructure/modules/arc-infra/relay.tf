@@ -1,7 +1,8 @@
 # The relay namespace is owned by dtos-manage-breast-screening ("manbrs").
 # This module creates one Hybrid Connection + listen-only auth rule per Arc-enabled
 # machine, auto-discovered by querying the Arc resource group.
-# HC names are derived from the Arc resource name (= SiteCode set at onboarding).
+# HC names are derived from the Arc resource name set at onboarding
+# (e.g. hc-gw-hull-university-teaching-hospitals-nhs-trust-rwa-01).
 #
 # Trigger: run `terraform apply` after each Arc onboarding to pick up new machines.
 
@@ -11,7 +12,8 @@ locals {
 }
 
 # Discover all Arc-enabled machines registered in the Arc resource group.
-# Each machine's name is the SiteCode set during onboarding (e.g. gw-RVJ-01).
+# Each machine's Arc resource name is set during onboarding
+# (e.g. gw-hull-university-teaching-hospitals-nhs-trust-rwa-01).
 data "azurerm_resources" "arc_machines" {
   count = var.enable_arc_servers ? 1 : 0
 
@@ -33,7 +35,7 @@ locals {
   arc_machines = merge(local.arc_machines_discovered, local.arc_machines_static)
 }
 
-# One Hybrid Connection per Arc machine (e.g. hc-gw-RVJ-01).
+# One Hybrid Connection per Arc machine (e.g. hc-gw-hull-university-teaching-hospitals-nhs-trust-rwa-01).
 resource "azurerm_relay_hybrid_connection" "per_machine" {
   for_each = local.arc_machines
 
