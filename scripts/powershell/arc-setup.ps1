@@ -8,12 +8,13 @@ param(
     [string]$ServicePrincipalId,
     [string]$ServicePrincipalSecret,
     # Site identity - controls the Arc resource name and Azure tags.
-    # SiteCode becomes the Arc machine name in Azure (e.g. gw-RVJ-01).
-    # Defaults to the machine hostname when not supplied (test/dev use).
-    [string]$SiteCode       = "",       # e.g. gw-RVJ-01 (ODS code + instance)
+    # Resource name is built as gw-<SiteName>-<ODSCode>-<Instance> (all lowercase).
+    # e.g. gw-north-bristol-nhs-trust-rvj-01
+    # Defaults to the machine hostname when SiteName/ODSCode/Instance are not supplied (test/dev use).
     [string]$SiteName       = "",       # e.g. North-Bristol-NHS-Trust (no spaces)
+    [string]$ODSCode        = "",       # e.g. RVJ
+    [string]$Instance       = "01",     # zero-padded instance number
     [string]$NHSRegion      = "",       # nw|neyh|mids|eoe|lon|se|sw
-    [string]$PacsVendor     = "",       # sectra|fujifilm|agfa|philips|carestream
     [string]$SiteType       = "static", # static|mobile
     [string]$DeploymentRing = "ring0"   # ring0|ring1|ring2|ring3|ring4
 )
@@ -35,10 +36,10 @@ try {
     Write-Log "=========================================" "INFO"
     Write-Log "Azure Arc Combined Setup Started" "INFO"
     Write-Log "=========================================" "INFO"
-    Write-Log "SiteCode       : $(if ($SiteCode) { $SiteCode } else { '(hostname)' })" "INFO"
     Write-Log "SiteName       : $(if ($SiteName) { $SiteName } else { '(not set)' })" "INFO"
+    Write-Log "ODSCode        : $(if ($ODSCode) { $ODSCode } else { '(not set)' })" "INFO"
+    Write-Log "Instance       : $Instance" "INFO"
     Write-Log "NHSRegion      : $(if ($NHSRegion) { $NHSRegion } else { '(not set)' })" "INFO"
-    Write-Log "PacsVendor     : $(if ($PacsVendor) { $PacsVendor } else { '(not set)' })" "INFO"
     Write-Log "SiteType       : $SiteType" "INFO"
     Write-Log "DeploymentRing : $DeploymentRing" "INFO"
     Write-Log "=========================================" "INFO"
@@ -142,16 +143,26 @@ try {
     Write-Log "Resource Group: $ResourceGroup" "INFO"
     Write-Log "Location      : $Location" "INFO"
 
+    # Build the Arc resource name from structured inputs (all lowercase).
+    # Format: gw-<SiteName>-<ODSCode>-<Instance>, e.g. gw-hull-university-teaching-hospitals-nhs-trust-rwa-01
+    # Azure constraint: a-z A-Z 0-9 - _ . and max 54 characters.
+    # Falls back to the machine hostname when SiteName/ODSCode are not supplied (test/dev use).
+    $ResourceName = if ($SiteName -and $ODSCode) {
+        "gw-$($SiteName.ToLower())-$($ODSCode.ToLower())-$Instance"
+    } else { "" }
+
+    if ($ResourceName) { Write-Log "ResourceName   : $ResourceName" "INFO" }
+
     # Build tags - all site metadata is stamped onto the Arc resource for Terraform
     # discovery and ADO pipeline targeting. SiteName must not contain spaces.
     $tags  = "ArcSQLServerExtensionDeployment=Disabled"
     $tags += ",Programme=BreastScreening"
     $tags += ",SiteType=$SiteType"
     $tags += ",DeploymentRing=$DeploymentRing"
-    if ($SiteCode)   { $tags += ",SiteCode=$SiteCode" }
-    if ($SiteName)   { $tags += ",SiteName=$SiteName" }
-    if ($NHSRegion)  { $tags += ",NHSRegion=$NHSRegion" }
-    if ($PacsVendor) { $tags += ",PacsVendor=$PacsVendor" }
+    if ($SiteName)  { $tags += ",SiteName=$SiteName" }
+    if ($ODSCode)   { $tags += ",ODSCode=$ODSCode" }
+    if ($Instance)  { $tags += ",Instance=$Instance" }
+    if ($NHSRegion) { $tags += ",NHSRegion=$NHSRegion" }
 
     # Build connect arguments. --resource-name sets the Azure resource name,
     # overriding the default (hostname). Required for meaningful HC naming in Terraform.
@@ -167,7 +178,7 @@ try {
         '--correlation-id',           $CorrelationId,
         '--tags',                     $tags
     )
-    if ($SiteCode) { $connectArgs += @('--resource-name', $SiteCode) }
+    if ($ResourceName) { $connectArgs += @('--resource-name', $ResourceName) }
 
     & "$azcmagentExe" @connectArgs
 

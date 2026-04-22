@@ -13,7 +13,6 @@
   - `*.his.arc.azure.com`
   - `relay-manbrs-<env>.servicebus.windows.net`
 - [ ] Trust ODS code confirmed via the [ODS portal](https://odsportal.nhsbsa.nhs.uk/)
-- [ ] PACS vendor confirmed (`sectra` | `fujifilm` | `agfa` | `philips` | `carestream`)
 - [ ] NHS region confirmed (`nw` | `neyh` | `mids` | `eoe` | `lon` | `se` | `sw`)
 - [ ] Deployment ring agreed with the programme team
 - [ ] `arc-onboarding-spn-client-id` and `arc-onboarding-spn-client-secret` retrieved from Key Vault
@@ -22,14 +21,25 @@
 
 ## Step 1 — Determine site parameters
 
+The Arc resource name is built automatically from `SiteName`, `ODSCode`, and `Instance`:
+
+```text
+gw-<SiteName>-<ODSCode>-<Instance>
+```
+
+All lowercase, hyphens only. Azure constraint: max 54 characters (`a-z A-Z 0-9 - _ .`).
+
 | Parameter | Format | Example |
 |-----------|--------|---------|
-| `SiteCode` | `gw-<ODSCode>-<instance>` | `gw-RVJ-01` |
-| `SiteName` | Trust name, hyphen-separated, no spaces | `North-Bristol-NHS-Trust` |
-| `NHSRegion` | One of: `nw` `neyh` `mids` `eoe` `lon` `se` `sw` | `sw` |
-| `PacsVendor` | One of: `sectra` `fujifilm` `agfa` `philips` `carestream` | `sectra` |
+| `SiteName` | Trust name, hyphen-separated, no spaces | `Hull-University-Teaching-Hospitals-NHS-Trust` |
+| `ODSCode` | ODS code (uppercase input, lowercased in name) | `RWA` |
+| `Instance` | Zero-padded instance number | `01` |
+| `NHSRegion` | One of: `nw` `neyh` `mids` `eoe` `lon` `se` `sw` | `neyh` |
 | `SiteType` | `static` or `mobile` | `static` |
 | `DeploymentRing` | `ring1`–`ring4` (see below) | `ring1` |
+
+> **Example**: `SiteName=Hull-University-Teaching-Hospitals-NHS-Trust`, `ODSCode=RWA`, `Instance=01`
+> → Arc resource name: `gw-hull-university-teaching-hospitals-nhs-trust-rwa-01` (54 chars — at the limit)
 
 **Ring assignments:**
 
@@ -43,54 +53,66 @@
 
 ## Step 2 — Run Arc onboarding script on the gateway VM
 
-Copy `scripts/powershell/arc-setup.ps1` to the VM and run from an **elevated PowerShell session**:
+Copy [`scripts/powershell/arc-setup.ps1`](../../../scripts/powershell/arc-setup.ps1) to the VM and run from an **elevated PowerShell session**.
+
+If script execution is disabled on the VM, allow it for the current session first:
+
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process
+```
+
+> This only affects the current PowerShell process and does not change the machine-wide policy.
+> If the script was downloaded from the internet and is still blocked, see [Script execution blocked](#script-execution-blocked) in Troubleshooting.
 
 ```powershell
 .\arc-setup.ps1 `
     -SubscriptionId         "<spoke-subscription-id>" `
     -TenantId               "<tenant-id>" `
-    -ResourceGroup          "rg-manbgw-<env>-uks-arc-enabled-servers" `
+    -ResourceGroup          "rg-mbsgw-<env>-uks-arc-enabled-servers" `
     -Location               "uksouth" `
     -ServicePrincipalId     "<arc-onboarding-spn-client-id>" `
     -ServicePrincipalSecret "<arc-onboarding-spn-client-secret>" `
-    -SiteCode               "gw-RVJ-01" `
-    -SiteName               "North-Bristol-NHS-Trust" `
-    -NHSRegion              "sw" `
-    -PacsVendor             "sectra" `
+    -SiteName               "Hull-University-Teaching-Hospitals-NHS-Trust" `
+    -ODSCode                "RWA" `
+    -Instance               "01" `
+    -NHSRegion              "neyh" `
     -SiteType               "static" `
     -DeploymentRing         "ring1"
 ```
 
 The script will:
+
 1. Install the Azure Arc agent (`azcmagent`) if not already present
-2. Stamp site metadata as tags on the Arc machine resource
-3. Connect the VM to Azure Arc with `--resource-name` set to `SiteCode`
+2. Build the Arc resource name: `gw-hull-university-teaching-hospitals-nhs-trust-rwa-01`
+3. Stamp site metadata as tags on the Arc machine resource
+4. Connect the VM to Azure Arc with `--resource-name` set to the built resource name
 
 Logs are written to `C:\ArcSetup\ArcSetup.log`.
 
-**Verify**: In the Azure portal, navigate to `rg-manbgw-<env>-uks-arc-enabled-servers` → Azure Arc machines → `gw-RVJ-01`. Status should be **Connected**.
+**Verify**: In the Azure portal, navigate to `rg-mbsgw-<env>-uks-arc-enabled-servers` → Azure Arc machines → `gw-hull-university-teaching-hospitals-nhs-trust-rwa-01`. Status should be **Connected**.
 
 ## Step 3 — Trigger Terraform to provision the Hybrid Connection
 
 Run the ADO pipeline **Deploy Arc Infrastructure - \<env\>** manually. Terraform discovers the new Arc machine and creates:
 
-- `hc-gw-RVJ-01` in the relay namespace (`relay-manbrs-<env>`)
+- `hc-gw-hull-university-teaching-hospitals-nhs-trust-rwa-01` in the relay namespace (`relay-manbrs-<env>`)
 - `listen` auth rule on that Hybrid Connection
 
-**Verify**: In the Azure portal, navigate to `relay-manbrs-<env>` → Hybrid Connections → `hc-gw-RVJ-01` is present.
+**Verify**: In the Azure portal, navigate to `relay-manbrs-<env>` → Hybrid Connections → `hc-gw-hull-university-teaching-hospitals-nhs-trust-rwa-01` is present.
 
 ## Step 4 — Deploy the gateway application
 
 Run the ADO pipeline **Deploy Gateway - \<env\>** with:
 
-```
-targetSiteCode : gw-RVJ-01
+```text
+targetSiteCode : gw-hull-university-teaching-hospitals-nhs-trust-rwa-01
 releaseTag     : latest        (or a specific tag, e.g. v1.2.3)
 ```
 
 The pipeline:
-1. Retrieves the listen SAS key for `hc-gw-RVJ-01`
-2. Sends an Arc Run Command to `gw-RVJ-01` that writes `.env` and runs `deploy.ps1`
+
+1. Retrieves the listen SAS key for `hc-gw-hull-university-teaching-hospitals-nhs-trust-rwa-01`
+2. Sends an Arc Run Command to `gw-hull-university-teaching-hospitals-nhs-trust-rwa-01` that writes `.env` and runs `deploy.ps1`
 3. Polls for completion and reports success or failure
 
 ## Step 5 — Smoke test
@@ -110,17 +132,17 @@ Check Log Analytics Workspace for an initial heartbeat within 5 minutes of servi
 ## Parameters reference
 
 | Parameter | Required | Default | Description |
-|-----------|----------|---------|-------------|
+| --------- | -------- | ------- | ----------- |
 | `-SubscriptionId` | Yes | — | Azure spoke subscription ID |
 | `-TenantId` | Yes | — | Azure Entra tenant ID |
 | `-ResourceGroup` | Yes | — | Arc-enabled servers resource group |
 | `-Location` | Yes | — | Azure region (always `uksouth`) |
 | `-ServicePrincipalId` | Yes | — | Arc onboarding SPN client ID |
 | `-ServicePrincipalSecret` | Yes | — | Arc onboarding SPN client secret |
-| `-SiteCode` | No | *(hostname)* | Arc resource name and tag; format `gw-<ODSCode>-<instance>` |
-| `-SiteName` | No | *(not set)* | Human-readable trust name; no spaces |
+| `-SiteName` | No | *(hostname)* | Trust name, hyphen-separated, no spaces; used to build Arc resource name |
+| `-ODSCode` | No | *(hostname)* | ODS code; used to build Arc resource name |
+| `-Instance` | No | `01` | Zero-padded instance number; used to build Arc resource name |
 | `-NHSRegion` | No | *(not set)* | NHS region code |
-| `-PacsVendor` | No | *(not set)* | PACS system vendor |
 | `-SiteType` | No | `static` | `static` or `mobile` |
 | `-DeploymentRing` | No | `ring0` | Rollout ring (`ring0`–`ring4`) |
 
@@ -135,6 +157,26 @@ Check `C:\ArcSetup\ArcSetup.log` on the VM. Common causes:
 - **Firewall blocking outbound** — confirm the VM can reach `*.arc.azure.com` on port 443
 - **SPN credentials wrong** — verify client ID and secret from Key Vault are current
 - **VM already registered** — if the machine was previously connected under a different name, disconnect first: `azcmagent disconnect`
+
+### Script execution blocked
+
+If you see `running scripts is disabled on this system`, run this first in the same elevated session:
+
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process
+```
+
+If the script was downloaded from the internet and is still blocked (error: `file is not digitally signed`), unblock the zone restriction first:
+
+```powershell
+Unblock-File -Path .\arc-setup.ps1
+```
+
+If the script is still blocked after `Unblock-File` (e.g. due to a stricter machine policy), use `Unrestricted` instead — still scoped to the current process only:
+
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy Unrestricted -Scope Process
+```
 
 ### Arc machine shows as Disconnected after onboarding
 
