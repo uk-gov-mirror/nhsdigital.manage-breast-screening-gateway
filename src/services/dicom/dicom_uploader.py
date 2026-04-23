@@ -9,9 +9,10 @@ import logging
 import os
 from typing import Optional
 
-
 import requests
 from azure.identity import ManagedIdentityCredential
+
+from environment import Environment
 
 logger = logging.getLogger(__name__)
 
@@ -65,9 +66,9 @@ class DICOMUploader:
         }
 
     @property
-    def access_token(self) -> str:
-        resource = os.getenv("CLOUD_API_RESOURCE")
-        if resource:
+    def access_token(self) -> str | None:
+        resource = os.getenv("CLOUD_API_RESOURCE", "")
+        if resource or Environment().production:
             return ManagedIdentityCredential().get_token(resource).token
         else:
             return os.getenv("CLOUD_API_TOKEN", "")

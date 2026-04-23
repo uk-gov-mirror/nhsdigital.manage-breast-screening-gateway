@@ -99,6 +99,19 @@ class TestDICOMUploader:
 
         assert DICOMUploader().headers == {"Authorization": "Bearer env_access_token"}
 
-    def test_upload_headers_without_any_token(self, _):
+    def test_upload_headers_in_production_with_no_cloud_api_resource(self, _, monkeypatch):
+        """Test that headers include access token from ManagedIdentityCredential in production even if CLOUD_API_RESOURCE is not set."""
+        monkeypatch.setenv("ENVIRONMENT", "prod")
+        with patch("services.dicom.dicom_uploader.ManagedIdentityCredential") as mock_credential:
+            mock_credential_instance = Mock()
+            mock_credential_instance.get_token.return_value.token = "prod_access_token"
+            mock_credential.return_value = mock_credential_instance
+
+            assert DICOMUploader().headers == {"Authorization": "Bearer prod_access_token"}
+            assert mock_credential_instance.get_token.call_args[0][0] == ""
+
+    def test_upload_headers_without_any_token(self, _, monkeypatch):
         """Test that headers include empty token if neither CLOUD_API_RESOURCE nor CLOUD_API_TOKEN is set."""
+        monkeypatch.delenv("CLOUD_API_RESOURCE", raising=False)
+        monkeypatch.delenv("CLOUD_API_TOKEN", raising=False)
         assert DICOMUploader().headers == {"Authorization": "Bearer "}
