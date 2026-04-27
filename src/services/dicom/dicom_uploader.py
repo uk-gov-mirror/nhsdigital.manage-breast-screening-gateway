@@ -10,6 +10,9 @@ import os
 from typing import Optional
 
 import requests
+from azure.identity import ManagedIdentityCredential
+
+from environment import Environment
 
 logger = logging.getLogger(__name__)
 
@@ -19,11 +22,6 @@ class DICOMUploader:
         self.api_endpoint = api_endpoint or os.getenv("CLOUD_API_ENDPOINT", "http://localhost:8000/api/v1/dicom")
         self.timeout = timeout
         self.verify_ssl = verify_ssl
-
-    def headers(self) -> dict:
-        return {
-            "Authorization": f"Bearer {os.getenv('CLOUD_API_TOKEN', '')}",
-        }
 
     def upload_dicom(self, sop_instance_uid: str, dicom_stream: io.BufferedReader, action_id: Optional[str]) -> bool:
         if not action_id:
@@ -42,7 +40,7 @@ class DICOMUploader:
                 files=files,
                 timeout=self.timeout,
                 verify=self.verify_ssl,
-                headers=self.headers(),
+                headers=self.headers,
             )
 
             if response.status_code == 201:
@@ -60,3 +58,17 @@ class DICOMUploader:
         except requests.exceptions.RequestException as e:
             logger.error(f"Upload error for {sop_instance_uid}: {e}", exc_info=True)
             return False
+
+    @property
+    def headers(self) -> dict:
+        return {
+            "Authorization": f"Bearer {self.access_token}",
+        }
+
+    @property
+    def access_token(self) -> str | None:
+        resource = os.getenv("CLOUD_API_RESOURCE", "")
+        if resource or Environment().production:
+            return ManagedIdentityCredential().get_token(resource).token
+        else:
+            return os.getenv("CLOUD_API_TOKEN", "")
