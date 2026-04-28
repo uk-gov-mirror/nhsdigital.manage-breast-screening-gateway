@@ -4,16 +4,23 @@ on:
   push:
     branches:
       - main
-    tags:
-      - 'v*'
   workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment for infra + app deployment"
+        required: true
+        type: choice
+        default: dev
+        options:
+          - dev
+          - preprod
+          - review
 
 concurrency: cicd-${{ github.ref }}
 
 permissions:
-  contents: write
+  contents: read
   id-token: write
-  attestations: write
   security-events: write
 
 jobs:
@@ -26,101 +33,144 @@ jobs:
     uses: ./.github/workflows/stage-2-test.yaml
     secrets: inherit
 
-  release-stage:
+  # Resolve the latest release tag once so downstream jobs can consume it.
+  resolve:
+    name: Resolve deployment targets
     needs: test-stage
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     outputs:
-      new_release_published: ${{ steps.release.outputs.new_release_published }}
-      new_release_version: ${{ steps.release.outputs.new_release_version }}
+      release_tag:    ${{ steps.tag.outputs.release_tag }}
+      deploy_dev:     ${{ steps.envs.outputs.deploy_dev }}
+      deploy_preprod: ${{ steps.envs.outputs.deploy_preprod }}
+      deploy_review:  ${{ steps.envs.outputs.deploy_review }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Read tool versions
-        id: tool-versions
+      - name: Compute target environments
+        id: envs
         run: |
-          echo "python=$(awk '/^python / {print $2}' .tool-versions)" >> "$GITHUB_OUTPUT"
-          echo "uv=$(awk '/^uv / {print $2}' .tool-versions)" >> "$GITHUB_OUTPUT"
+          INPUT="${{ inputs.environment }}"
+          case "$INPUT" in
+            dev)
+              echo "deploy_dev=true"     >> "$GITHUB_OUTPUT"
+              echo "deploy_preprod=false" >> "$GITHUB_OUTPUT"
+              echo "deploy_review=false" >> "$GITHUB_OUTPUT"
+              ;;
+            preprod)
+              echo "deploy_dev=false"    >> "$GITHUB_OUTPUT"
+              echo "deploy_preprod=true" >> "$GITHUB_OUTPUT"
+              echo "deploy_review=false" >> "$GITHUB_OUTPUT"
+              ;;
+            review)
+              echo "deploy_dev=false"    >> "$GITHUB_OUTPUT"
+              echo "deploy_preprod=false" >> "$GITHUB_OUTPUT"
+              echo "deploy_review=true"  >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              # push-to-main (empty input): deploy to both dev and preprod
+              echo "deploy_dev=true"     >> "$GITHUB_OUTPUT"
+              echo "deploy_preprod=true" >> "$GITHUB_OUTPUT"
+              echo "deploy_review=false" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
 
-      - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
-        with:
-          python-version: ${{ steps.tool-versions.outputs.python }}
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
-        with:
-          version: ${{ steps.tool-versions.outputs.uv }}
-          enable-cache: true
-
-      - name: Run semantic-release
-        id: release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Resolve latest release tag
+        id: tag
         run: |
-          uv pip install python-semantic-release --system
-
-          # Detect next version (--print exits without side effects)
-          VERSION=$(semantic-release version --print 2>/dev/null) || true
-
-          if [[ -n "$VERSION" ]] && ! git ls-remote --tags origin "refs/tags/v$VERSION" | grep -q .; then
-            echo "Next version detected: $VERSION"
-
-            # Create and push the tag (no commit needed, tag push is not blocked by branch protection)
-            git tag "v$VERSION"
-            git push origin "v$VERSION"
-
-            echo "new_release_published=true" >> "$GITHUB_OUTPUT"
-            echo "new_release_version=v$VERSION" >> "$GITHUB_OUTPUT"
-          else
-            echo "No new release needed (version: ${VERSION:-none}, tag may already exist)"
-            echo "new_release_published=false" >> "$GITHUB_OUTPUT"
-            echo "new_release_version=" >> "$GITHUB_OUTPUT"
+          LATEST_TAG=$(gh release list \
+            --repo "${{ github.repository }}" \
+            --limit 1 \
+            --json tagName --jq '.[0].tagName' 2>/dev/null || echo "")
+          if [[ -z "$LATEST_TAG" ]]; then
+            echo "::error::No GitHub Release exists. Push a v* tag to create the first release."
+            exit 1
           fi
+          echo "release_tag=${LATEST_TAG}" >> "$GITHUB_OUTPUT"
+          echo "Latest release: ${LATEST_TAG}"
 
-  build-stage:
-    needs: [test-stage, release-stage]
-    if: |
-      always() &&
-      needs.test-stage.result == 'success' &&
-      (
-        github.ref_type == 'tag' ||
-        needs.release-stage.outputs.new_release_published == 'true'
-      )
-    uses: ./.github/workflows/stage-3-build.yaml
-    with:
-      version: ${{ needs.release-stage.outputs.new_release_version }}
-      new_release_published: ${{ needs.release-stage.outputs.new_release_published == 'true' }}
-    secrets: inherit
+  # ---- dev ------------------------------------------------------------------
 
-  deploy-stage:
-    name: Deploy stage
-    needs: [commit-stage, test-stage]
+  deploy-infra-dev:
+    name: Deploy infra (dev)
+    needs: resolve
+    if: needs.resolve.outputs.deploy_dev == 'true'
     permissions:
       id-token: write
     uses: ./.github/workflows/stage-4-deploy.yaml
     with:
-      environments: '["review", "dev", "preprod"]'
+      environments: '["dev"]'
       commit_sha: ${{ github.sha }}
     secrets: inherit
 
-  deploy-app-stage:
-    name: Deploy app stage
-    needs: [build-stage, release-stage]
-    # Only deploy when a new release was published — no release means no deployable artifact.
-    if: |
-      always() &&
-      needs.build-stage.result == 'success' &&
-      needs.release-stage.outputs.new_release_published == 'true'
+  deploy-app-dev:
+    name: Deploy app (dev)
+    needs: [resolve, deploy-infra-dev]
+    if: needs.resolve.outputs.deploy_dev == 'true'
     permissions:
       id-token: write
     uses: ./.github/workflows/stage-4-deploy-app.yaml
     with:
-      environments: '["dev", "preprod"]'
-      release_tag: ${{ needs.release-stage.outputs.new_release_version }}
+      environments: '["dev"]'
+      release_tag: ${{ needs.resolve.outputs.release_tag }}
+      commit_sha: ${{ github.sha }}
+    secrets: inherit
+
+  # ---- preprod --------------------------------------------------------------
+
+  deploy-infra-preprod:
+    name: Deploy infra (preprod)
+    needs: [resolve, deploy-app-dev]
+    if: |
+      always() &&
+      needs.resolve.outputs.deploy_preprod == 'true' &&
+      (needs.deploy-app-dev.result == 'success' || needs.deploy-app-dev.result == 'skipped')
+    permissions:
+      id-token: write
+    uses: ./.github/workflows/stage-4-deploy.yaml
+    with:
+      environments: '["preprod"]'
+      commit_sha: ${{ github.sha }}
+    secrets: inherit
+
+  deploy-app-preprod:
+    name: Deploy app (preprod)
+    needs: [resolve, deploy-infra-preprod]
+    if: |
+      always() &&
+      needs.resolve.outputs.deploy_preprod == 'true' &&
+      needs.deploy-infra-preprod.result == 'success'
+    permissions:
+      id-token: write
+    uses: ./.github/workflows/stage-4-deploy-app.yaml
+    with:
+      environments: '["preprod"]'
+      release_tag: ${{ needs.resolve.outputs.release_tag }}
+      commit_sha: ${{ github.sha }}
+    secrets: inherit
+
+  # ---- review (manual only) -------------------------------------------------
+
+  deploy-infra-review:
+    name: Deploy infra (review)
+    needs: resolve
+    if: needs.resolve.outputs.deploy_review == 'true'
+    permissions:
+      id-token: write
+    uses: ./.github/workflows/stage-4-deploy.yaml
+    with:
+      environments: '["review"]'
+      commit_sha: ${{ github.sha }}
+    secrets: inherit
+
+  deploy-app-review:
+    name: Deploy app (review)
+    needs: [resolve, deploy-infra-review]
+    if: needs.resolve.outputs.deploy_review == 'true'
+    permissions:
+      id-token: write
+    uses: ./.github/workflows/stage-4-deploy-app.yaml
+    with:
+      environments: '["review"]'
+      release_tag: ${{ needs.resolve.outputs.release_tag }}
       commit_sha: ${{ github.sha }}
     secrets: inherit
