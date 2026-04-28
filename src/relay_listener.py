@@ -5,19 +5,14 @@ Supports creation of Modality Worklist Items.
 """
 
 import asyncio
-import base64
-import hashlib
-import hmac
 import json
 import logging
 import os
-import time
-import urllib.parse
 
+from azure.identity import DefaultAzureCredential
 from dotenv import load_dotenv
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosedError
-from websockets.frames import CloseCode
 
 from services.mwl.create_worklist_item import CreateWorklistItem
 from services.storage import MWLStorage
@@ -28,8 +23,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 DB_PATH = os.getenv("MWL_DB_PATH", "/var/lib/pacs/worklist.db")
-EXPIRED_TOKEN = "ExpiredToken"
-SAS_TOKEN_EXPIRY_SECONDS = 3600
+AZURE_RELAY_SCOPE = "https://relay.azure.com/.default"
 
 
 class RelayListener:
@@ -40,8 +34,6 @@ class RelayListener:
     Environment variables:
     AZURE_RELAY_NAMESPACE: Azure Relay namespace (default: relay-test.servicebus.windows.net)
     AZURE_RELAY_HYBRID_CONNECTION: Azure Relay hybrid connection name (default: relay-test-hc)
-    AZURE_RELAY_KEY_NAME: Azure Relay shared access key name (default: RootManageSharedAccessKey)
-    AZURE_RELAY_SHARED_ACCESS_KEY: Azure Relay shared access key (default: none)
     MWL_DB_PATH: Path to the MWL SQLite database file (default: /var/lib/pacs/worklist.db)
     """
 
@@ -91,36 +83,31 @@ class RelayListener:
 
     def _connect(self):
         """Connect to Azure Relay."""
-        return connect(self.relay_uri.connection_url(), compression=None)
+        return connect(
+            self.relay_uri.connection_url(),
+            compression=None,
+            additional_headers=self.relay_uri.auth_headers(),
+        )
 
 
 class RelayURI:
     def __init__(self):
         self.relay_namespace = os.getenv("AZURE_RELAY_NAMESPACE", "relay-test.servicebus.windows.net")
         self.hybrid_connection_name = os.getenv("AZURE_RELAY_HYBRID_CONNECTION", "relay-test-hc")
-        self.key_name = os.getenv("AZURE_RELAY_KEY_NAME", "RootManageSharedAccessKey")
-        self.shared_access_key = os.getenv("AZURE_RELAY_SHARED_ACCESS_KEY", "")
-
-    def create_sas_token(self, expiry_seconds: int = SAS_TOKEN_EXPIRY_SECONDS) -> str:
-        """Create SAS token for Azure Relay authentication."""
-        uri = f"http://{self.relay_namespace}/{self.hybrid_connection_name}"
-        encoded_uri = urllib.parse.quote_plus(uri)
-        expiry = str(int(time.time() + expiry_seconds))
-        signature = base64.b64encode(
-            hmac.new(self.shared_access_key.encode(), f"{encoded_uri}\n{expiry}".encode(), hashlib.sha256).digest()
-        )
-        return (
-            f"SharedAccessSignature sr={encoded_uri}"
-            f"&sig={urllib.parse.quote_plus(signature)}"
-            f"&se={expiry}&skn={self.key_name}"
-        )
+        self._credential = DefaultAzureCredential()
 
     def connection_url(self) -> str:
-        token = self.create_sas_token()
-        return (
-            f"wss://{self.relay_namespace}/$hc/{self.hybrid_connection_name}"
-            f"?sb-hc-action=listen&sb-hc-token={urllib.parse.quote_plus(token)}"
-        )
+        return f"wss://{self.relay_namespace}/$hc/{self.hybrid_connection_name}?sb-hc-action=listen"
+
+    def auth_headers(self) -> dict:
+        token = self._credential.get_token(AZURE_RELAY_SCOPE).token
+        return {"Authorization": f"Bearer {token}"}
+
+
+def verify_credentials():
+    """Verify managed identity credentials are available. Raises ClientAuthenticationError if not."""
+    DefaultAzureCredential().get_token(AZURE_RELAY_SCOPE)
+    logger.info("Managed identity credentials verified.")
 
 
 async def main():
@@ -131,6 +118,7 @@ async def main():
     configure_telemetry(service_name="relay-listener")
 
     logger.info("Socket Listener Starting...")
+    verify_credentials()
     storage = MWLStorage(db_path=DB_PATH)
 
     while True:
@@ -142,13 +130,9 @@ async def main():
         except ConnectionClosedError as e:
             code = e.rcvd.code if e.rcvd else "N/A"
             reason = e.rcvd.reason if e.rcvd else "N/A"
-
-            if code == CloseCode.INTERNAL_ERROR.value and EXPIRED_TOKEN in reason:
-                logger.info("SAS token expired, refreshing...")
-            else:
-                logger.warning(f"Connection closed with code {code}: {reason}")
-                logger.warning("Retrying in 5 seconds...")
-                await asyncio.sleep(5)
+            logger.warning(f"Connection closed with code {code}: {reason}")
+            logger.warning("Retrying in 5 seconds...")
+            await asyncio.sleep(5)
         except Exception as e:
             logger.warning(f"Connection error: {e}")
             logger.warning("Retrying in 5 seconds...")

@@ -2,7 +2,7 @@ import shutil
 import sys
 from contextlib import contextmanager
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
 import pytest
@@ -13,6 +13,14 @@ from pynetdicom.sop_class import (
 )
 
 sys.path.append(f"{Path(__file__).parent.parent}/src")
+
+
+@pytest.fixture(autouse=True)
+def mock_azure_credential():
+    mock = MagicMock()
+    mock.get_token.return_value.token = "test-token"
+    with patch("relay_listener.DefaultAzureCredential", return_value=mock):
+        yield mock
 
 
 @pytest.fixture
