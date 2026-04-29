@@ -80,6 +80,25 @@ if ($EnvContentB64) {
     Write-Log "Written .env to $BaseInstallPath" "SUCCESS"
 }
 
+# -- Version Check (skip reinstall if already on this version) ----------------
+#
+# deploy.ps1 writes a VERSION file after every successful deployment.
+# On subsequent runs with the same tag, we exit early to avoid redundant
+# reinstalls (e.g. on every main-branch merge when no new release exists).
+# New VMs have no VERSION file and always proceed with installation.
+# When ReleaseTag is "latest", skip the check — the resolved version is unknown
+# at this point and the check would never match.
+
+$versionFile = Join-Path $BaseInstallPath "VERSION"
+if ($ReleaseTag -ne "latest" -and (Test-Path $versionFile)) {
+    $currentVersion = (Get-Content $versionFile -Raw).Trim()
+    if ($currentVersion -eq $ReleaseTag) {
+        Write-Log "Already running $ReleaseTag - skipping deployment" "INFO"
+        exit 0
+    }
+    Write-Log "Upgrading from $currentVersion to $ReleaseTag" "INFO"
+}
+
 # -- Helpers ------------------------------------------------------------------
 
 function Invoke-Nssm {
@@ -323,7 +342,7 @@ if (Test-Path $versionDir) {
     Stop-AllServices -Services $services -TimeoutSeconds $ServiceStopTimeoutSeconds
 }
 
-$stagingDir = Join-Path $env:TEMP "gateway-deploy-staging-$([guid]::NewGuid().ToString().Substring(0,8))"
+$stagingDir = Join-Path $BaseInstallPath "staging-$([guid]::NewGuid().ToString().Substring(0,8))"
 New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null
 
 Add-Type -Assembly System.IO.Compression.FileSystem
@@ -560,3 +579,8 @@ if ($cutoverFailed) {
 
 $cutoverDuration = ((Get-Date) - $cutoverStart).TotalSeconds
 Write-Log "Deployment of version $version completed in $([math]::Round($cutoverDuration, 2))s." "SUCCESS"
+
+# Record the deployed release tag so subsequent runs can skip reinstallation.
+$versionFile = Join-Path $BaseInstallPath "VERSION"
+[System.IO.File]::WriteAllText($versionFile, $ReleaseTag, (New-Object System.Text.UTF8Encoding $false))
+Write-Log "Written VERSION: $ReleaseTag" "INFO"

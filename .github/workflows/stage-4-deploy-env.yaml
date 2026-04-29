@@ -1,0 +1,61 @@
+name: "Stage 4: Deploy to environment"
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: Target environment (dev / preprod / prod)
+        required: true
+        type: string
+      release_tag:
+        description: GitHub release tag to deploy (e.g. v1.2.3)
+        required: true
+        type: string
+      commit_sha:
+        description: Commit SHA used to trigger the ADO pipeline
+        required: true
+        type: string
+
+jobs:
+  deploy-infra:
+    name: Deploy infra
+    permissions:
+      id-token: write
+    uses: ./.github/workflows/stage-4-deploy.yaml
+    with:
+      environments: '["${{ inputs.environment }}"]'
+      commit_sha: ${{ inputs.commit_sha }}
+    secrets: inherit
+
+  deploy-app:
+    name: Deploy app
+    needs: deploy-infra
+    permissions:
+      id-token: write
+    uses: ./.github/workflows/stage-4-deploy-app.yaml
+    with:
+      environments: '["${{ inputs.environment }}"]'
+      release_tag: ${{ inputs.release_tag }}
+      commit_sha: ${{ inputs.commit_sha }}
+    secrets: inherit
+
+  smoke-test:
+    name: Smoke test
+    needs: deploy-app
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    permissions:
+      id-token: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Azure login
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Run smoke test
+        run: bash scripts/bash/smoke_test.sh ${{ inputs.environment }}

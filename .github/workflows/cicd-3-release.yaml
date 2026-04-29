@@ -1,0 +1,74 @@
+name: "CI/CD: Release"
+
+# Prod requires a manual approval — configure required reviewers in GitHub
+# Settings → Environments → prod before provisioning the prod environment.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+concurrency: release-${{ github.ref }}
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+  security-events: write
+
+jobs:
+  commit-stage:
+    uses: ./.github/workflows/stage-1-commit.yaml
+    secrets: inherit
+
+  test-stage:
+    needs: commit-stage
+    uses: ./.github/workflows/stage-2-test.yaml
+    secrets: inherit
+
+  build-stage:
+    needs: test-stage
+    uses: ./.github/workflows/stage-3-build.yaml
+    with:
+      version: ${{ github.ref_name }}
+      new_release_published: true
+    secrets: inherit
+
+  deploy-dev:
+    name: Deploy (dev)
+    needs: build-stage
+    uses: ./.github/workflows/stage-4-deploy-env.yaml
+    with:
+      environment: dev
+      release_tag: ${{ github.ref_name }}
+      commit_sha: ${{ github.sha }}
+    secrets: inherit
+
+  deploy-preprod:
+    name: Deploy (preprod)
+    needs: deploy-dev
+    uses: ./.github/workflows/stage-4-deploy-env.yaml
+    with:
+      environment: preprod
+      release_tag: ${{ github.ref_name }}
+      commit_sha: ${{ github.sha }}
+    secrets: inherit
+
+  prod-approval:
+    name: Awaiting prod approval
+    needs: deploy-preprod
+    runs-on: ubuntu-latest
+    environment: prod
+    steps:
+      - name: Approved
+        run: echo "Prod deployment approved - proceeding"
+
+  deploy-prod:
+    name: Deploy (prod)
+    needs: prod-approval
+    uses: ./.github/workflows/stage-4-deploy-env.yaml
+    with:
+      environment: prod
+      release_tag: ${{ github.ref_name }}
+      commit_sha: ${{ github.sha }}
+    secrets: inherit
