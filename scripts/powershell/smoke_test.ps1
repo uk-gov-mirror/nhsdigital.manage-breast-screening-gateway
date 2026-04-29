@@ -35,8 +35,9 @@ $env:PYTHONPATH = 'src'
 
 $echoScript = @'
 from pynetdicom import AE
+from pynetdicom.sop_class import Verification
 ae = AE()
-ae.add_requested_context("1.2.840.10008.1.1")  # gitleaks:allow
+ae.add_requested_context(Verification)
 assoc = ae.associate("127.0.0.1", 4244)
 if not assoc.is_established:
     raise SystemExit("PACS association failed — check Gateway-PACS service logs")
