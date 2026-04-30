@@ -14,11 +14,12 @@ import os
 import time
 import urllib.parse
 
+from azure.identity import DefaultAzureCredential, ManagedIdentityCredential
 from dotenv import load_dotenv
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosedError
-from websockets.frames import CloseCode
 
+from environment import Environment
 from services.mwl.create_worklist_item import CreateWorklistItem
 from services.storage import MWLStorage
 from telemetry import configure_telemetry
@@ -28,8 +29,12 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 DB_PATH = os.getenv("MWL_DB_PATH", "/var/lib/pacs/worklist.db")
-EXPIRED_TOKEN = "ExpiredToken"
+AZURE_RELAY_SCOPE = "https://relay.azure.com/.default"
 SAS_TOKEN_EXPIRY_SECONDS = 3600
+
+
+class CredentialNotAvailableError(RuntimeError):
+    pass
 
 
 class RelayListener:
@@ -40,9 +45,11 @@ class RelayListener:
     Environment variables:
     AZURE_RELAY_NAMESPACE: Azure Relay namespace (default: relay-test.servicebus.windows.net)
     AZURE_RELAY_HYBRID_CONNECTION: Azure Relay hybrid connection name (default: relay-test-hc)
-    AZURE_RELAY_KEY_NAME: Azure Relay shared access key name (default: RootManageSharedAccessKey)
-    AZURE_RELAY_SHARED_ACCESS_KEY: Azure Relay shared access key (default: none)
     MWL_DB_PATH: Path to the MWL SQLite database file (default: /var/lib/pacs/worklist.db)
+
+    Non-production only (SAS token fallback):
+    AZURE_RELAY_KEY_NAME: Shared access policy name (default: RootManageSharedAccessKey)
+    AZURE_RELAY_SHARED_ACCESS_KEY: Shared access key value
     """
 
     def __init__(self, storage: MWLStorage):
@@ -91,7 +98,11 @@ class RelayListener:
 
     def _connect(self):
         """Connect to Azure Relay."""
-        return connect(self.relay_uri.connection_url(), compression=None)
+        return connect(
+            self.relay_uri.connection_url(),
+            compression=None,
+            additional_headers=self.relay_uri.auth_headers(),
+        )
 
 
 class RelayURI:
@@ -100,9 +111,35 @@ class RelayURI:
         self.hybrid_connection_name = os.getenv("AZURE_RELAY_HYBRID_CONNECTION", "relay-test-hc")
         self.key_name = os.getenv("AZURE_RELAY_KEY_NAME", "RootManageSharedAccessKey")
         self.shared_access_key = os.getenv("AZURE_RELAY_SHARED_ACCESS_KEY", "")
+        self._env = Environment()
+        self._credential = None if self._use_sas() else self._build_credential()
 
-    def create_sas_token(self, expiry_seconds: int = SAS_TOKEN_EXPIRY_SECONDS) -> str:
-        """Create SAS token for Azure Relay authentication."""
+    def _use_sas(self) -> bool:
+        return not self._env.production and bool(self.shared_access_key)
+
+    def _build_credential(self):
+        if self._env.production:
+            return ManagedIdentityCredential()
+        return DefaultAzureCredential()
+
+    def connection_url(self) -> str:
+        base = f"wss://{self.relay_namespace}/$hc/{self.hybrid_connection_name}?sb-hc-action=listen"
+        if self._use_sas():
+            token = self._create_sas_token()
+            return f"{base}&sb-hc-token={urllib.parse.quote_plus(token)}"
+        return base
+
+    def auth_headers(self) -> dict:
+        if self._use_sas():
+            return {}
+        if self._credential is None:
+            raise CredentialNotAvailableError(
+                "No credential available — _credential should never be None when not using SAS"
+            )
+        token = self._credential.get_token(AZURE_RELAY_SCOPE).token
+        return {"Authorization": f"Bearer {token}"}
+
+    def _create_sas_token(self, expiry_seconds: int = SAS_TOKEN_EXPIRY_SECONDS) -> str:
         uri = f"http://{self.relay_namespace}/{self.hybrid_connection_name}"
         encoded_uri = urllib.parse.quote_plus(uri)
         expiry = str(int(time.time() + expiry_seconds))
@@ -115,12 +152,25 @@ class RelayURI:
             f"&se={expiry}&skn={self.key_name}"
         )
 
-    def connection_url(self) -> str:
-        token = self.create_sas_token()
-        return (
-            f"wss://{self.relay_namespace}/$hc/{self.hybrid_connection_name}"
-            f"?sb-hc-action=listen&sb-hc-token={urllib.parse.quote_plus(token)}"
-        )
+
+def verify_credentials():
+    """
+    Verify relay credentials are available at startup.
+
+    In production, raises ClientAuthenticationError if managed identity is not configured.
+    In non-production with a SAS key present, logs the auth method and returns immediately.
+    """
+    uri = RelayURI()
+    if uri._use_sas():
+        logger.info("Using SAS token authentication for Azure Relay.")
+    else:
+        if uri._credential is None:
+            raise CredentialNotAvailableError(
+                "No credential available — _credential should never be None when not using SAS"
+            )
+        uri._credential.get_token(AZURE_RELAY_SCOPE)
+        credential_type = "ManagedIdentityCredential" if uri._env.production else "DefaultAzureCredential"
+        logger.info(f"Azure Relay credentials verified ({credential_type}).")
 
 
 async def main():
@@ -131,6 +181,7 @@ async def main():
     configure_telemetry(service_name="relay-listener")
 
     logger.info("Socket Listener Starting...")
+    verify_credentials()
     storage = MWLStorage(db_path=DB_PATH)
 
     while True:
@@ -142,13 +193,9 @@ async def main():
         except ConnectionClosedError as e:
             code = e.rcvd.code if e.rcvd else "N/A"
             reason = e.rcvd.reason if e.rcvd else "N/A"
-
-            if code == CloseCode.INTERNAL_ERROR.value and EXPIRED_TOKEN in reason:
-                logger.info("SAS token expired, refreshing...")
-            else:
-                logger.warning(f"Connection closed with code {code}: {reason}")
-                logger.warning("Retrying in 5 seconds...")
-                await asyncio.sleep(5)
+            logger.warning(f"Connection closed with code {code}: {reason}")
+            logger.warning("Retrying in 5 seconds...")
+            await asyncio.sleep(5)
         except Exception as e:
             logger.warning(f"Connection error: {e}")
             logger.warning("Retrying in 5 seconds...")
